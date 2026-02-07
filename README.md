@@ -8,11 +8,11 @@ FieldVision is a real-time AI copilot for industrial maintenance technicians. It
 
 ## ✨ Features
 
-- **🎥 Real-Time Video Analysis** - Continuous 1 FPS monitoring for safety hazards, PPE compliance, and procedure verification
-- **🎤 Hands-Free Voice Interface** - Full two-way audio conversation using Gemini Live API's native audio modality
+- **🎥 Real-Time Video Analysis** - Continuous monitoring for safety hazards, PPE compliance, and procedure verification
+- **🎤 Hands-Free Voice Interface** - Full two-way audio conversation using Gemini Live API
+- **� Automated Reporting** - Generates PDF-ready HTML reports with AI executive summaries
+- **🔄 Session Resumption** - "New Topic" feature allows seamless context switching
 - **📚 Technical Manual Integration** - Grounded Q&A using cached maintenance documentation
-- **📋 Automatic Audit Trail** - Every safety observation logged to JSON for compliance reporting
-- **🔄 Session Resumption** - Automatic reconnection with context preservation on network interruptions
 
 ## 🏗️ Architecture
 
@@ -135,6 +135,8 @@ field-vision/
 | `GET` | `/health` | Health check |
 | `GET` | `/api/session/{id}/summary` | Session audit summary |
 | `GET` | `/api/session/{id}/events` | Session event list |
+| `GET` | `/api/audit/logs` | List all historical sessions |
+| `GET` | `/api/reports/{session_id}` | Generate HTML Audit Report |
 
 ## 🛡️ Safety Event Types
 

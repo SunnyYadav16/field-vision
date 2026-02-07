@@ -42,6 +42,59 @@ class AuditLogger:
         self._lock = asyncio.Lock()
         self._session_events: dict[str, list[SafetyEvent]] = {}
         
+        # Load existing logs
+        self._load_history()
+        
+    def _load_history(self) -> None:
+        """Load audit history from disk"""
+        if not self.log_path.exists():
+            return
+            
+        try:
+            with open(self.log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                        event = SafetyEvent(**data)
+                        # Ensure severity is valid (clamp 1-5)
+                        event.severity = min(max(event.severity, 1), 5)
+                        
+                        if event.session_id not in self._session_events:
+                            self._session_events[event.session_id] = []
+                        self._session_events[event.session_id].append(event)
+                    except json.JSONDecodeError:
+                        continue
+            logger.info("audit_history_loaded", 
+                       sessions=len(self._session_events), 
+                       total_events=sum(len(e) for e in self._session_events.values()))
+        except Exception as e:
+            logger.error("audit_history_load_error", error=str(e))
+
+    def get_all_sessions(self) -> list[dict]:
+        """Get summary of all recorded sessions"""
+        sessions = []
+        for session_id, events in self._session_events.items():
+            if not events:
+                continue
+                
+            start_time = events[0].timestamp
+            end_time = events[-1].timestamp
+            event_count = len(events)
+            critical = sum(1 for e in events if e.severity >= 4)
+            
+            sessions.append({
+                "session_id": session_id,
+                "start_time": start_time,
+                "end_time": end_time,
+                "event_count": event_count,
+                "critical_events": critical
+            })
+            
+        # Sort by start time, newest first
+        return sorted(sessions, key=lambda x: x["start_time"], reverse=True)
+        
     async def log_event(
         self,
         session_id: str,
@@ -113,7 +166,8 @@ class AuditLogger:
         event_types: dict[str, int] = {}
         
         for event in events:
-            severity_counts[event.severity] += 1
+            # Severity should be clamped, but use get for safety
+            severity_counts[event.severity] = severity_counts.get(event.severity, 0) + 1
             event_types[event.event_type] = event_types.get(event.event_type, 0) + 1
         
         return {

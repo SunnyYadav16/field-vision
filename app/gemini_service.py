@@ -377,12 +377,16 @@ class LiveSession:
                 if not self._running:
                     break
                     
-                await self._handle_response(response)
+                try:
+                    await self._handle_response(response)
+                except Exception as e:
+                    logger.error("handle_response_error", error=str(e), session_id=self.session_id)
+                    # Continue listening despite error
                     
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error("receive_error", error=str(e), session_id=self.session_id)
+            logger.error("receive_loop_fatal_error", error=str(e), session_id=self.session_id)
     
     async def _handle_response(self, response) -> None:
         """Process a response from Gemini"""
@@ -422,17 +426,21 @@ class LiveSession:
                 )
                 
                 # Send tool response back to Gemini
-                await self._session.send(
-                    input=types.LiveClientToolResponse(
-                        function_responses=[
-                            types.FunctionResponse(
-                                name=fc.name,
-                                id=fc.id,
-                                response=result
-                            )
-                        ]
+                try:
+                    await self._session.send(
+                        input=types.LiveClientToolResponse(
+                            function_responses=[
+                                types.FunctionResponse(
+                                    name=fc.name,
+                                    id=fc.id,
+                                    response=result
+                                )
+                            ]
+                        )
                     )
-                )
+                    logger.debug("tool_response_sent", function=fc.name, session_id=self.session_id)
+                except Exception as e:
+                    logger.error("tool_response_send_failed", function=fc.name, error=str(e), session_id=self.session_id)
 
 
 # Service singleton

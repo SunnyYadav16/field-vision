@@ -82,6 +82,7 @@ class FieldVisionApp {
             videoOffIcon: document.getElementById('videoOffIcon'),
             textInput: document.getElementById('textInput'),
             sendTextBtn: document.getElementById('sendTextBtn'),
+            newTopicBtn: document.getElementById('newTopicBtn'),
 
             // Output
             responseContainer: document.getElementById('responseContainer'),
@@ -92,6 +93,14 @@ class FieldVisionApp {
             eventCount: document.getElementById('eventCount'),
             criticalCount: document.getElementById('criticalCount'),
             warningCount: document.getElementById('warningCount'),
+
+            // Reports
+            reportsBtn: document.getElementById('reportsBtn'),
+            reportsModal: document.getElementById('reportsModal'),
+            closeReportsBtn: document.getElementById('closeReportsBtn'),
+            closeReportsBackdrop: document.getElementById('closeReportsBackdrop'),
+            refreshReportsBtn: document.getElementById('refreshReportsBtn'),
+            reportsList: document.getElementById('reportsList'),
         };
     }
 
@@ -104,11 +113,24 @@ class FieldVisionApp {
         this.elements.textInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.sendText();
         });
+
+        if (this.elements.newTopicBtn) {
+            this.elements.newTopicBtn.addEventListener('click', () => this.resetContext());
+        }
+
+        // Reports
+        if (this.elements.reportsBtn) {
+            this.elements.reportsBtn.addEventListener('click', () => this.toggleReports(true));
+            this.elements.closeReportsBtn.addEventListener('click', () => this.toggleReports(false));
+            this.elements.closeReportsBackdrop.addEventListener('click', () => this.toggleReports(false));
+            this.elements.refreshReportsBtn.addEventListener('click', () => this.fetchReports());
+        }
     }
 
     // ==================== WebSocket ====================
 
     connectWebSocket() {
+        this.shouldReconnect = true;
         return new Promise((resolve, reject) => {
             this.ws = new WebSocket(this.config.wsUrl);
 
@@ -144,35 +166,35 @@ class FieldVisionApp {
         });
     }
 
-    async handleDisconnect() {
-        // If session was active (unexpected disconnect), try to auto-reconnect
-        if (this.state.sessionActive && this.reconnectAttempts < this.maxReconnectAttempts) {
+    handleDisconnect() {
+        if (!this.shouldReconnect) return;
+
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
-            this.updateStatus(`Connection lost. Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-            this.addResponse(`⚠️ Connection interrupted. Attempting to reconnect...`, 'system');
 
-            try {
-                // Wait before reconnecting
-                await new Promise(resolve => setTimeout(resolve, 2000));
-
-                // Reconnect WebSocket
-                await this.connectWebSocket();
-
-                // Restart the Gemini session
-                this.sendMessage('start_session', {
-                    system_instruction: null,
-                    manual_context: null,
-                });
-
-                this.addResponse(`✅ Reconnected! You can continue your conversation.`, 'system');
-
-            } catch (error) {
-                console.error('Reconnect failed:', error);
-                if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-                    this.addResponse(`❌ Could not reconnect. Please refresh the page.`, 'system');
-                    this.cleanupSession();
-                }
+            // If intentional reset, show friendly message
+            if (this.isResetting) {
+                this.updateStatus('Starting new topic...');
+                this.isResetting = false;
+            } else {
+                this.updateStatus(`Connection lost. Reconnecting... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+                this.addResponse(`⚠️ Connection lost. attempting to reconnect...`, 'system');
             }
+
+            // Exponential backoff or immediate retry
+            let delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 5000);
+
+            if (this.isResetting) {
+                delay = 100; // Fast retry for manual reset
+                this.isResetting = false;
+            }
+
+            setTimeout(() => this.reconnectSession(), delay);
+        } else {
+            this.updateStatus('Connection failed. Please refresh.');
+            this.state.sessionActive = false;
+            this.addResponse(`❌ Connection failed permanently. Please refresh the page.`, 'system');
+            this.cleanupSession();
         }
     }
 
@@ -198,6 +220,29 @@ class FieldVisionApp {
             handler(message.payload);
         } else {
             console.warn('Unknown message type:', message.type);
+        }
+    }
+
+    async reconnectSession() {
+        try {
+            console.log("Attempting to reconnect session...");
+            await this.connectWebSocket();
+
+            // Ensure media is ready (should reuse existing)
+            await this.setupMedia();
+
+            // Resume session
+            this.sendMessage('start_session', {
+                system_instruction: null,
+                manual_context: null,
+            });
+
+            console.log("Reconnect handshake sent.");
+
+        } catch (error) {
+            console.error("Reconnect attempt failed:", error);
+            // Trigger next retry cycle
+            this.handleDisconnect();
         }
     }
 
@@ -233,6 +278,12 @@ class FieldVisionApp {
         // Update UI
         this.elements.startSessionBtn.classList.add('hidden');
         this.elements.endSessionBtn.classList.remove('hidden');
+
+        if (this.elements.newTopicBtn) {
+            this.elements.newTopicBtn.classList.remove('hidden');
+            this.elements.newTopicBtn.disabled = false;
+        }
+
         this.elements.recordingBadge.classList.remove('hidden');
         this.elements.textInput.disabled = false;
         this.elements.sendTextBtn.disabled = false;
@@ -250,6 +301,7 @@ class FieldVisionApp {
     }
 
     async endSession() {
+        this.shouldReconnect = false;
         // Send end message to server (best effort)
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.sendMessage('end_session', {});
@@ -271,6 +323,8 @@ class FieldVisionApp {
         // Update UI
         this.elements.startSessionBtn.classList.remove('hidden');
         this.elements.endSessionBtn.classList.add('hidden');
+        if (this.elements.newTopicBtn) this.elements.newTopicBtn.classList.add('hidden');
+
         this.elements.recordingBadge.classList.add('hidden');
         this.elements.textInput.disabled = true;
         this.elements.sendTextBtn.disabled = true;
@@ -300,6 +354,12 @@ class FieldVisionApp {
     // ==================== Media Setup ====================
 
     async setupMedia() {
+        // Reuse existing stream if active
+        if (this.mediaStream && this.mediaStream.active) {
+            console.log("Reusing existing media stream");
+            return;
+        }
+
         try {
             this.mediaStream = await navigator.mediaDevices.getUserMedia({
                 video: {
@@ -681,6 +741,125 @@ class FieldVisionApp {
     }
 
     // ==================== Utilities ====================
+
+    // ==================== Context Management ====================
+
+    resetContext() {
+        if (!this.state.sessionActive) return;
+
+        this.isResetting = true;
+        this.reconnectAttempts = 0; // Reset attempts for fresh start
+
+        this.updateStatus('Resetting context...');
+        this.addResponse('--- Starting New Topic ---', 'system');
+
+        // Disable controls temporarily
+        this.elements.textInput.disabled = true;
+        this.elements.sendTextBtn.disabled = true;
+        if (this.elements.newTopicBtn) this.elements.newTopicBtn.disabled = true;
+
+        // Force close to trigger auto-reconnect logic
+        if (this.ws) {
+            this.ws.close(4000, "Reset Context");
+        }
+
+        // Safety timeout to re-enable UI and force reload if reset fails
+        setTimeout(() => {
+            if (this.elements.textInput.disabled && !this.state.sessionActive) {
+                this.updateStatus('Reset timed out. Reloading...');
+                console.warn("Session reset timed out. Forcing reload.");
+                window.location.reload();
+            }
+        }, 5000);
+    }
+
+    // ==================== Reports UI ====================
+
+    toggleReports(show) {
+        if (!this.elements.reportsModal) return;
+
+        if (show) {
+            this.elements.reportsModal.classList.remove('hidden');
+            this.fetchReports();
+        } else {
+            this.elements.reportsModal.classList.add('hidden');
+        }
+    }
+
+    async fetchReports() {
+        const container = this.elements.reportsList;
+        if (!container) return;
+
+        container.innerHTML = '<p class="text-center text-gray-500 py-8">Loading reports...</p>';
+
+        try {
+            const response = await fetch('/api/audit/logs');
+            const data = await response.json();
+
+            if (!data.sessions || data.sessions.length === 0) {
+                container.innerHTML = '<p class="text-center text-gray-500 py-8 italic">No audit logs found.</p>';
+                return;
+            }
+
+            container.innerHTML = '';
+
+            data.sessions.forEach(session => {
+                const date = new Date(session.start_time).toLocaleString();
+                let duration = 'Unknown';
+
+                if (session.end_time) {
+                    const diff = new Date(session.end_time) - new Date(session.start_time);
+                    if (!isNaN(diff)) {
+                        const mins = Math.floor(diff / 60000);
+                        const secs = Math.round((diff % 60000) / 1000);
+                        duration = `${mins}m ${secs}s`;
+                    }
+                }
+
+                const div = document.createElement('div');
+                div.className = 'bg-industrial-800 p-4 rounded-xl border border-white/5 hover:border-white/20 transition-colors mb-4';
+                div.innerHTML = `
+                    <div class="flex justify-between items-start mb-3">
+                        <div>
+                            <span class="text-xs text-gray-500 font-bold uppercase">Session ID</span>
+                            <p class="font-mono text-xs text-accent-primary truncate w-64" title="${session.session_id}">${session.session_id}</p>
+                        </div>
+                        <div class="text-right">
+                             <span class="text-xs text-gray-500 font-bold uppercase">Date</span>
+                             <p class="text-xs text-gray-300 font-medium">${date}</p>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-4 gap-3 mt-3">
+                         <div class="bg-white/5 p-2 rounded-lg text-center">
+                             <span class="block text-xs text-gray-500 uppercase">Duration</span>
+                             <span class="text-sm font-bold text-gray-300 mono">${duration}</span>
+                         </div>
+                         <div class="bg-white/5 p-2 rounded-lg text-center">
+                             <span class="block text-xs text-gray-500 uppercase">Events</span>
+                             <span class="text-lg font-bold text-white mono">${session.event_count}</span>
+                         </div>
+                         <div class="bg-white/5 p-2 rounded-lg text-center">
+                             <span class="block text-xs text-gray-500 uppercase">Critical</span>
+                             <span class="text-lg font-bold text-safety-red mono">${session.critical_events}</span>
+                         </div>
+                         <div class="bg-white/5 p-2 rounded-lg flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer" onclick="window.open('/api/reports/${session.session_id}', '_blank')">
+                             <div class="text-center">
+                                 <svg class="w-5 h-5 text-accent-primary mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                                 </svg>
+                                 <span class="text-xs text-accent-primary font-medium">Report</span>
+                             </div>
+                         </div>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+
+        } catch (error) {
+            console.error('Failed to fetch reports:', error);
+            container.innerHTML = `<p class="text-center text-safety-red py-8">Failed to load reports: ${error.message}</p>`;
+        }
+    }
 
     arrayBufferToBase64(buffer) {
         const bytes = new Uint8Array(buffer);

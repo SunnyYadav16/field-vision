@@ -108,6 +108,26 @@ async def get_session_events(session_id: str):
     return {"session_id": session_id, "events": [e.to_dict() for e in events]}
 
 
+@app.get("/api/audit/logs")
+async def get_audit_logs():
+    """Get summarized audit history for all sessions"""
+    audit_logger = get_audit_logger()
+    sessions = audit_logger.get_all_sessions()
+    return {"sessions": sessions, "total_sessions": len(sessions)}
+
+
+@app.get("/api/reports/{session_id}")
+async def get_session_report(session_id: str):
+    """Generate HTML report for session"""
+    from fastapi.responses import HTMLResponse
+    from app.reporting import AuditReporter
+    
+    audit_logger = get_audit_logger()
+    reporter = AuditReporter(audit_logger)
+    html = await reporter.generate_session_report(session_id)
+    return HTMLResponse(content=html, status_code=200)
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time communication"""

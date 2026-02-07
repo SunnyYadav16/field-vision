@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -35,113 +36,159 @@
     </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-        
+
         * {
             font-family: 'Inter', sans-serif;
         }
-        
+
         .mono {
             font-family: 'JetBrains Mono', monospace;
         }
-        
+
         /* Glassmorphism effects */
         .glass {
             background: rgba(255, 255, 255, 0.05);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
-        
+
         .glass-dark {
             background: rgba(0, 0, 0, 0.4);
             backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.08);
         }
-        
+
         /* Pulse animation for recording */
         @keyframes pulse-ring {
-            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+            0% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+            }
+
+            70% {
+                box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+            }
         }
-        
+
         .pulse-recording {
             animation: pulse-ring 1.5s infinite;
         }
-        
+
         /* Smooth scrollbar */
         ::-webkit-scrollbar {
             width: 6px;
         }
-        
+
         ::-webkit-scrollbar-track {
             background: #1a1a1a;
         }
-        
+
         ::-webkit-scrollbar-thumb {
             background: #444;
             border-radius: 3px;
         }
-        
+
         ::-webkit-scrollbar-thumb:hover {
             background: #555;
         }
-        
+
         /* Status indicator glow */
         .status-glow {
             box-shadow: 0 0 20px currentColor;
         }
-        
+
         /* Video container aspect ratio */
         .video-container {
             aspect-ratio: 16/9;
         }
-        
+
         /* Event severity badges */
-        .severity-1 { background: #3b82f6; }
-        .severity-2 { background: #22c55e; }
-        .severity-3 { background: #eab308; }
-        .severity-4 { background: #f97316; }
-        .severity-5 { background: #ef4444; }
-        
+        .severity-1 {
+            background: #3b82f6;
+        }
+
+        .severity-2 {
+            background: #22c55e;
+        }
+
+        .severity-3 {
+            background: #eab308;
+        }
+
+        .severity-4 {
+            background: #f97316;
+        }
+
+        .severity-5 {
+            background: #ef4444;
+        }
+
         /* Fade in animation */
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
-        
+
         .fade-in {
             animation: fadeIn 0.3s ease-out forwards;
         }
     </style>
 </head>
+
 <body class="dark bg-industrial-900 text-white min-h-screen">
     <div class="min-h-screen flex flex-col">
         <!-- Header -->
         <header class="glass-dark border-b border-white/10 px-6 py-4">
             <div class="max-w-7xl mx-auto flex items-center justify-between">
                 <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-primary to-accent-secondary flex items-center justify-center">
+                    <div
+                        class="w-10 h-10 rounded-xl bg-gradient-to-br from-accent-primary to-accent-secondary flex items-center justify-center">
                         <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z">
+                            </path>
                         </svg>
                     </div>
                     <div>
-                        <h1 class="text-xl font-semibold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
+                        <h1
+                            class="text-xl font-semibold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
                             FieldVision
                         </h1>
                         <p class="text-xs text-gray-500">Industrial Safety Assistant</p>
                     </div>
                 </div>
-                
-                <!-- Connection Status -->
-                <div id="connectionStatus" class="flex items-center gap-2 px-4 py-2 rounded-full glass">
-                    <div id="statusIndicator" class="w-2 h-2 rounded-full bg-gray-500"></div>
-                    <span id="statusText" class="text-sm text-gray-400">Disconnected</span>
+
+                <div class="flex items-center gap-4">
+                    <button id="reportsBtn"
+                        class="px-4 py-2 rounded-lg bg-industrial-800 text-sm hover:bg-industrial-700 transition-colors flex items-center gap-2 border border-white/10">
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z">
+                            </path>
+                        </svg>
+                        Reports
+                    </button>
+                    <!-- Connection Status -->
+                    <div id="connectionStatus" class="flex items-center gap-2 px-4 py-2 rounded-full glass">
+                        <div id="statusIndicator" class="w-2 h-2 rounded-full bg-gray-500"></div>
+                        <span id="statusText" class="text-sm text-gray-400">Disconnected</span>
+                    </div>
                 </div>
             </div>
         </header>
-        
+
         <!-- Main Content -->
         <main class="flex-1 p-6">
             <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -150,88 +197,131 @@
                     <div class="glass rounded-2xl p-4">
                         <div class="flex items-center justify-between mb-4">
                             <h2 class="text-lg font-medium">Live Camera Feed</h2>
-                            <div id="recordingBadge" class="hidden flex items-center gap-2 px-3 py-1 rounded-full bg-safety-red/20 text-safety-red">
+                            <div id="recordingBadge"
+                                class="hidden flex items-center gap-2 px-3 py-1 rounded-full bg-safety-red/20 text-safety-red">
                                 <div class="w-2 h-2 rounded-full bg-safety-red pulse-recording"></div>
                                 <span class="text-sm font-medium">MONITORING</span>
                             </div>
                         </div>
-                        
+
                         <!-- Video Container -->
                         <div class="video-container bg-industrial-800 rounded-xl overflow-hidden relative">
-                            <video id="videoPreview" class="w-full h-full object-cover" autoplay playsinline muted></video>
+                            <video id="videoPreview" class="w-full h-full object-cover" autoplay playsinline
+                                muted></video>
                             <canvas id="captureCanvas" class="hidden"></canvas>
-                            
+
                             <!-- Overlay when inactive -->
-                            <div id="videoPlaceholder" class="absolute inset-0 flex flex-col items-center justify-center bg-industrial-800">
-                                <svg class="w-16 h-16 text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                            <div id="videoPlaceholder"
+                                class="absolute inset-0 flex flex-col items-center justify-center bg-industrial-800">
+                                <svg class="w-16 h-16 text-gray-600 mb-4" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                                        d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z">
+                                    </path>
                                 </svg>
                                 <p class="text-gray-500">Camera feed will appear here</p>
                                 <p class="text-sm text-gray-600 mt-1">Click "Start Session" to begin</p>
                             </div>
                         </div>
                     </div>
-                    
+
                     <!-- Controls -->
                     <div class="glass rounded-2xl p-4">
                         <div class="flex flex-wrap items-center gap-3">
-                            <button id="startSessionBtn" class="flex-1 sm:flex-none px-6 py-3 rounded-xl bg-gradient-to-r from-accent-primary to-accent-secondary hover:opacity-90 transition-opacity font-medium flex items-center justify-center gap-2">
+                            <button id="startSessionBtn"
+                                class="flex-1 sm:flex-none px-6 py-3 rounded-xl bg-gradient-to-r from-accent-primary to-accent-secondary hover:opacity-90 transition-opacity font-medium flex items-center justify-center gap-2">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z">
+                                    </path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                                 </svg>
                                 Start Session
                             </button>
-                            
-                            <button id="endSessionBtn" class="flex-1 sm:flex-none px-6 py-3 rounded-xl bg-safety-red/20 text-safety-red hover:bg-safety-red/30 transition-colors font-medium flex items-center justify-center gap-2 hidden">
+
+                            <button id="endSessionBtn"
+                                class="flex-1 sm:flex-none px-6 py-3 rounded-xl bg-safety-red/20 text-safety-red hover:bg-safety-red/30 transition-colors font-medium flex items-center justify-center gap-2 hidden">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"></path>
                                 </svg>
                                 End Session
                             </button>
-                            
-                            <button id="toggleMuteBtn" class="p-3 rounded-xl glass hover:bg-white/10 transition-colors" title="Toggle Microphone">
-                                <svg id="micOnIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+
+                            <button id="toggleMuteBtn" class="p-3 rounded-xl glass hover:bg-white/10 transition-colors"
+                                title="Toggle Microphone">
+                                <svg id="micOnIcon" class="w-5 h-5" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z">
+                                    </path>
                                 </svg>
-                                <svg id="micOffIcon" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" clip-rule="evenodd"></path>
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"></path>
+                                <svg id="micOffIcon" class="w-5 h-5 hidden" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"
+                                        clip-rule="evenodd"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"></path>
                                 </svg>
                             </button>
-                            
-                            <button id="toggleVideoBtn" class="p-3 rounded-xl glass hover:bg-white/10 transition-colors" title="Toggle Camera">
-                                <svg id="videoOnIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+
+                            <button id="toggleVideoBtn" class="p-3 rounded-xl glass hover:bg-white/10 transition-colors"
+                                title="Toggle Camera">
+                                <svg id="videoOnIcon" class="w-5 h-5" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z">
+                                    </path>
                                 </svg>
-                                <svg id="videoOffIcon" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path>
+                                <svg id="videoOffIcon" class="w-5 h-5 hidden" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636">
+                                    </path>
                                 </svg>
                             </button>
                         </div>
-                        
+
                         <!-- Text Input -->
                         <div class="mt-4 flex gap-2">
-                            <input id="textInput" type="text" placeholder="Type a message or question..." 
+                            <button id="newTopicBtn"
+                                class="px-3 py-3 rounded-xl bg-industrial-700 hover:bg-industrial-600 text-gray-300 transition-colors disabled:opacity-50 hidden"
+                                title="Start New Topic (Reset Context)" disabled>
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15">
+                                    </path>
+                                </svg>
+                            </button>
+                            <input id="textInput" type="text" placeholder="Type a message or question..."
                                 class="flex-1 px-4 py-3 rounded-xl bg-industrial-800 border border-white/10 focus:border-accent-primary focus:outline-none transition-colors text-sm"
                                 disabled>
-                            <button id="sendTextBtn" class="px-4 py-3 rounded-xl bg-accent-primary/20 text-accent-primary hover:bg-accent-primary/30 transition-colors disabled:opacity-50" disabled>
+                            <button id="sendTextBtn"
+                                class="px-4 py-3 rounded-xl bg-accent-primary/20 text-accent-primary hover:bg-accent-primary/30 transition-colors disabled:opacity-50"
+                                disabled>
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
                                 </svg>
                             </button>
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- Side Panel -->
                 <div class="space-y-4">
                     <!-- AI Response Panel -->
                     <div class="glass rounded-2xl p-4 h-64 flex flex-col">
                         <h2 class="text-lg font-medium mb-3 flex items-center gap-2">
-                            <svg class="w-5 h-5 text-accent-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path>
+                            <svg class="w-5 h-5 text-accent-primary" fill="none" stroke="currentColor"
+                                viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z">
+                                </path>
                             </svg>
                             AI Assistant
                         </h2>
@@ -239,12 +329,15 @@
                             <p class="text-gray-500 italic">AI responses will appear here...</p>
                         </div>
                     </div>
-                    
+
                     <!-- Safety Events Panel -->
                     <div class="glass rounded-2xl p-4 flex-1 max-h-96 flex flex-col">
                         <h2 class="text-lg font-medium mb-3 flex items-center gap-2">
-                            <svg class="w-5 h-5 text-safety-yellow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                            <svg class="w-5 h-5 text-safety-yellow" fill="none" stroke="currentColor"
+                                viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z">
+                                </path>
                             </svg>
                             Safety Events
                         </h2>
@@ -252,7 +345,7 @@
                             <p class="text-gray-500 text-sm italic">No events logged yet</p>
                         </div>
                     </div>
-                    
+
                     <!-- Session Stats -->
                     <div class="glass rounded-2xl p-4">
                         <h2 class="text-lg font-medium mb-3">Session Stats</h2>
@@ -278,7 +371,7 @@
                 </div>
             </div>
         </main>
-        
+
         <!-- Footer -->
         <footer class="glass-dark border-t border-white/10 px-6 py-3">
             <div class="max-w-7xl mx-auto flex items-center justify-between text-xs text-gray-500">
@@ -287,7 +380,42 @@
             </div>
         </footer>
     </div>
-    
+
+    <!-- Reports Modal -->
+    <div id="reportsModal" class="fixed inset-0 z-50 flex items-center justify-center hidden fade-in">
+        <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" id="closeReportsBackdrop"></div>
+        <div
+            class="relative w-full max-w-4xl bg-industrial-900 border border-white/10 rounded-2xl shadow-2xl max-h-[85vh] flex flex-col m-4">
+            <!-- Modal Header -->
+            <div class="p-6 border-b border-white/10 flex items-center justify-between">
+                <h2 class="text-xl font-semibold">Safety Audit Logs</h2>
+                <button id="closeReportsBtn" class="p-2 hover:bg-white/10 rounded-lg transition-colors">
+                    <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                        </path>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="flex-1 overflow-auto p-6">
+                <div id="reportsList" class="space-y-4">
+                    <!-- Reports will be injected here -->
+                    <p class="text-center text-gray-500 py-8">Loading reports...</p>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="p-6 border-t border-white/10 flex justify-end">
+                <button id="refreshReportsBtn"
+                    class="px-4 py-2 rounded-lg bg-industrial-800 hover:bg-industrial-700 text-sm transition-colors text-white border border-white/10">
+                    Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/app.js"></script>
 </body>
+
 </html>
