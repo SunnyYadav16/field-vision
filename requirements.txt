@@ -1,0 +1,20 @@
+# FieldVision - Industrial Safety Assistant
+# Core Framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+
+# Google AI
+google-genai>=1.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+aiofiles>=24.1.0
+pydantic>=2.10.0
+pydantic-settings>=2.5.0
+
+# Audio Processing
+numpy>=2.1.0
+
+# Logging & Monitoring
+structlog>=24.4.0
