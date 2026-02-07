@@ -134,6 +134,18 @@ IMPORTANT: You are an ADVISORY system only. You do NOT control any machinery. Al
                 parts=[types.Part(text=full_instruction)]
             ),
             tools=[self.SAFETY_EVENT_TOOL],
+            
+            # Configure voice and generation settings
+            generation_config=types.GenerationConfig(
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name="Puck"
+                        )
+                    )
+                )
+            ),
+            
             # Enable context window compression for longer sessions
             context_window_compression=types.ContextWindowCompressionConfig(
                 sliding_window=types.SlidingWindow(),
@@ -267,53 +279,96 @@ class LiveSession:
         logger.info("disconnected_from_gemini", session_id=self.session_id)
     
     async def send_audio(self, audio_data: bytes) -> None:
-        """Send audio data to Gemini"""
+        """Send audio data to Gemini with validation"""
         if not self._session or not self._running:
             return
-            
-        await self._session.send(
-            input=types.LiveClientRealtimeInput(
-                media_chunks=[
-                    types.Blob(
-                        mime_type="audio/pcm;rate=16000",
-                        data=audio_data
-                    )
-                ]
+        
+        # Validate audio data
+        if not audio_data:
+            return
+        
+        # Limit audio chunk size (max 32KB for efficiency)
+        max_chunk_size = 32 * 1024
+        if len(audio_data) > max_chunk_size:
+            logger.warning("audio_chunk_too_large", 
+                          size=len(audio_data), 
+                          max_size=max_chunk_size)
+            audio_data = audio_data[:max_chunk_size]
+        
+        try:
+            await self._session.send(
+                input=types.LiveClientRealtimeInput(
+                    media_chunks=[
+                        types.Blob(
+                            mime_type="audio/pcm;rate=16000",
+                            data=audio_data
+                        )
+                    ]
+                )
             )
-        )
+        except Exception as e:
+            logger.error("send_audio_error", error=str(e), session_id=self.session_id)
     
     async def send_video_frame(self, jpeg_data: bytes) -> None:
-        """Send a video frame to Gemini"""
+        """Send a video frame to Gemini with validation"""
         if not self._session or not self._running:
             return
-            
-        await self._session.send(
-            input=types.LiveClientRealtimeInput(
-                media_chunks=[
-                    types.Blob(
-                        mime_type="image/jpeg",
-                        data=jpeg_data
-                    )
-                ]
+        
+        # Validate video data
+        if not jpeg_data:
+            return
+        
+        # Limit frame size (max 512KB for efficiency)
+        max_frame_size = 512 * 1024
+        if len(jpeg_data) > max_frame_size:
+            logger.warning("video_frame_too_large", 
+                          size=len(jpeg_data), 
+                          max_size=max_frame_size)
+            return  # Skip oversized frames instead of truncating
+        
+        try:
+            await self._session.send(
+                input=types.LiveClientRealtimeInput(
+                    media_chunks=[
+                        types.Blob(
+                            mime_type="image/jpeg",
+                            data=jpeg_data
+                        )
+                    ]
+                )
             )
-        )
+        except Exception as e:
+            logger.error("send_video_error", error=str(e), session_id=self.session_id)
     
     async def send_text(self, text: str) -> None:
-        """Send a text message to Gemini"""
+        """Send a text message to Gemini with validation"""
         if not self._session or not self._running:
             return
-            
-        await self._session.send(
-            input=types.LiveClientContent(
-                turns=[
-                    types.Content(
-                        role="user",
-                        parts=[types.Part(text=text)]
-                    )
-                ],
-                turn_complete=True
+        
+        # Validate text
+        if not text or not text.strip():
+            return
+        
+        # Limit text length
+        max_text_length = 4000
+        if len(text) > max_text_length:
+            logger.warning("text_too_long", length=len(text), max_length=max_text_length)
+            text = text[:max_text_length]
+        
+        try:
+            await self._session.send(
+                input=types.LiveClientContent(
+                    turns=[
+                        types.Content(
+                            role="user",
+                            parts=[types.Part(text=text.strip())]
+                        )
+                    ],
+                    turn_complete=True
+                )
             )
-        )
+        except Exception as e:
+            logger.error("send_text_error", error=str(e), session_id=self.session_id)
     
     async def _receive_loop(self) -> None:
         """Background task to receive responses from Gemini"""

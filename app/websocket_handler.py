@@ -15,6 +15,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from .gemini_service import get_gemini_service, SessionConfig, LiveSession
 from .audit import get_audit_logger
+from .manual_loader import get_manual_loader, validate_manual_context
 
 logger = structlog.get_logger(__name__)
 
@@ -145,11 +146,26 @@ class ClientConnection:
         
         self.session_id = str(uuid.uuid4())
         
+        # Load manual context (from payload or default)
+        manual_context = payload.get("manual_context")
+        if manual_context is None:
+            # Auto-load default safety manual
+            manual_loader = get_manual_loader()
+            manual_context = manual_loader.get_default_manual()
+            if manual_context:
+                logger.info("default_manual_loaded", session_id=self.session_id)
+        
+        # Validate manual context
+        is_valid, error_msg = validate_manual_context(manual_context)
+        if not is_valid:
+            await self._send_error(f"Invalid manual context: {error_msg}")
+            return
+        
         # Create session config
         config = SessionConfig(
             session_id=self.session_id,
             system_instruction=payload.get("system_instruction"),
-            manual_context=payload.get("manual_context"),
+            manual_context=manual_context,
             resume_handle=payload.get("resume_handle")
         )
         

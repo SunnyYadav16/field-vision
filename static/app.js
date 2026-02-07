@@ -5,13 +5,15 @@
 
 class FieldVisionApp {
     constructor() {
-        // Configuration
+        // Configuration - Optimized for lower bandwidth
         this.config = {
             wsUrl: `ws://${window.location.host}/ws`,
-            frameRate: 1,           // 1 FPS for video
-            jpegQuality: 0.85,
+            frameRate: 1,           // 1 FPS for video (can reduce to 0.5 for slower connections)
+            jpegQuality: 0.6,       // Reduced from 0.85 for faster transfer
             audioSampleRate: 16000,
             audioBitDepth: 16,
+            maxVideoWidth: 640,     // Max resolution constraints
+            maxVideoHeight: 480,
         };
 
         // State
@@ -117,10 +119,18 @@ class FieldVisionApp {
                 resolve();
             };
 
-            this.ws.onclose = () => {
-                console.log('WebSocket disconnected');
+            this.ws.onclose = (event) => {
+                console.log(`WebSocket disconnected. Code: ${event.code}, Reason: ${event.reason}, Clean: ${event.wasClean}`);
                 this.updateConnectionStatus(false);
-                this.handleDisconnect();
+
+                // standard close is 1000, going away is 1001
+                // irregular codes often mean timeout/network error
+                if (event.code !== 1000) {
+                    this.handleDisconnect();
+                } else if (this.state.sessionActive) {
+                    // Even if clean close, if session was active, something is wrong
+                    this.handleDisconnect();
+                }
             };
 
             this.ws.onerror = (error) => {
@@ -134,11 +144,35 @@ class FieldVisionApp {
         });
     }
 
-    handleDisconnect() {
+    async handleDisconnect() {
+        // If session was active (unexpected disconnect), try to auto-reconnect
         if (this.state.sessionActive && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
-            console.log(`Attempting reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
-            setTimeout(() => this.connectWebSocket(), 2000);
+            this.updateStatus(`Connection lost. Reconnecting (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+            this.addResponse(`⚠️ Connection interrupted. Attempting to reconnect...`, 'system');
+
+            try {
+                // Wait before reconnecting
+                await new Promise(resolve => setTimeout(resolve, 2000));
+
+                // Reconnect WebSocket
+                await this.connectWebSocket();
+
+                // Restart the Gemini session
+                this.sendMessage('start_session', {
+                    system_instruction: null,
+                    manual_context: null,
+                });
+
+                this.addResponse(`✅ Reconnected! You can continue your conversation.`, 'system');
+
+            } catch (error) {
+                console.error('Reconnect failed:', error);
+                if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+                    this.addResponse(`❌ Could not reconnect. Please refresh the page.`, 'system');
+                    this.cleanupSession();
+                }
+            }
         }
     }
 
@@ -365,14 +399,30 @@ class FieldVisionApp {
 
         if (video.readyState < 2) return;  // Not ready
 
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+        // Scale down if needed for optimization
+        let width = video.videoWidth;
+        let height = video.videoHeight;
+
+        if (width > this.config.maxVideoWidth) {
+            const scale = this.config.maxVideoWidth / width;
+            width = this.config.maxVideoWidth;
+            height = Math.floor(height * scale);
+        }
+
+        if (height > this.config.maxVideoHeight) {
+            const scale = this.config.maxVideoHeight / height;
+            height = this.config.maxVideoHeight;
+            width = Math.floor(width * scale);
+        }
+
+        canvas.width = width;
+        canvas.height = height;
 
         const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0);
+        ctx.drawImage(video, 0, 0, width, height);
 
         canvas.toBlob((blob) => {
-            if (blob) {
+            if (blob && blob.size < 512 * 1024) {  // Skip if > 512KB
                 const reader = new FileReader();
                 reader.onload = () => {
                     const base64 = reader.result.split(',')[1];
@@ -449,7 +499,17 @@ class FieldVisionApp {
     }
 
     onError(payload) {
-        this.showError(payload.error);
+        const errorMsg = payload.error || 'Unknown error';
+
+        // Check if this is a timeout/keepalive error that we can auto-recover from
+        if (errorMsg.includes('keepalive') || errorMsg.includes('timeout') || errorMsg.includes('1011')) {
+            console.log('Session timeout detected, attempting auto-reconnect...');
+            // Trigger reconnect flow instead of just showing error
+            this.handleDisconnect();
+        } else {
+            // For other errors, show to user
+            this.showError(errorMsg);
+        }
     }
 
     onStatus(payload) {
