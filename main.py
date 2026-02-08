@@ -7,9 +7,14 @@ import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 import structlog
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, Depends, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+
+from app.auth import (
+    authenticate_user, create_token, get_current_user,
+    get_ws_user, has_permission, verify_token
+)
 
 from app.config import get_settings
 from app.websocket_handler import get_connection_manager
@@ -70,6 +75,49 @@ if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
+# ── Login Endpoint ──
+@app.post("/api/login")
+async def login(request: Request):
+    body = await request.json()
+    user_id = body.get("user_id", "")
+    password = body.get("password", "")
+
+    user = authenticate_user(user_id, password)
+    if not user:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid credentials"}
+        )
+
+    token = create_token(user_id, user)
+    return {
+        "token": token,
+        "user": {
+            "id": user_id,
+            "name": user["name"],
+            "role": user["role"],
+            "zone": user["zone"],
+            "permissions": user["permissions"]
+        }
+    }
+
+
+# ── Get Current User Info ──
+@app.get("/api/me")
+async def get_me(user: dict = Depends(get_current_user)):
+    return user
+
+
+# ── Serve Login Page (no auth needed) ──
+@app.get("/login")
+async def login_page():
+    login_path = static_dir / "login.html"
+    if login_path.exists():
+        return FileResponse(login_path)
+    return JSONResponse({"error": "Login page not found"}, status_code=404)
+
+
+# ── Serve Main App (auth checked client-side) ──
 @app.get("/")
 async def root():
     """Serve the main application page"""
@@ -80,6 +128,14 @@ async def root():
         {"error": "Frontend not found"},
         status_code=404
     )
+
+
+@app.get("/manager")
+async def manager_page():
+    manager_path = static_dir / "manager.html"
+    if manager_path.exists():
+        return FileResponse(manager_path)
+    return JSONResponse({"error": "Manager page not found"}, status_code=404)
 
 
 @app.get("/health")
@@ -130,9 +186,24 @@ async def get_session_report(session_id: str):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time communication"""
+    """WebSocket endpoint for real-time communication with auth"""
+    # ── Auth Gate ──
+    user = await get_ws_user(websocket)
+    if user is None:
+        return  # Connection was rejected in get_ws_user
+
+    # Store user context for this session
+    session_user = {
+        "user_id": user["user_id"],
+        "name": user["name"],
+        "role": user["role"],
+        "zone": user["zone"],
+        "permissions": user["permissions"]
+    }
+
+    # Accept connection and pass user context
     manager = get_connection_manager()
-    connection = await manager.connect(websocket)
+    connection = await manager.connect(websocket, session_user)
     
     try:
         await connection.handle_messages()

@@ -1,0 +1,65 @@
+{
+    "users": {
+        "tech_042": {
+            "password": "field123",
+            "name": "Alex Rivera",
+            "role": "technician",
+            "zone": "floor_a",
+            "permissions": [
+                "voice_qa",
+                "receive_guidance",
+                "acknowledge_warnings",
+                "view_own_sessions"
+            ]
+        },
+        "tech_078": {
+            "password": "field456",
+            "name": "Jordan Kim",
+            "role": "senior_technician",
+            "zone": "floor_a",
+            "permissions": [
+                "voice_qa",
+                "receive_guidance",
+                "acknowledge_warnings",
+                "view_own_sessions",
+                "create_work_order"
+            ]
+        },
+        "sup_007": {
+            "password": "super789",
+            "name": "Morgan Chen",
+            "role": "supervisor",
+            "zone": "floor_a",
+            "permissions": [
+                "voice_qa",
+                "receive_guidance",
+                "acknowledge_warnings",
+                "view_own_sessions",
+                "view_zone_sessions",
+                "review_safety_events",
+                "create_work_order",
+                "approve_work_order"
+            ]
+        },
+        "mgr_001": {
+            "password": "manage101",
+            "name": "Sam Patel",
+            "role": "safety_manager",
+            "zone": "all",
+            "permissions": [
+                "voice_qa",
+                "receive_guidance",
+                "acknowledge_warnings",
+                "view_own_sessions",
+                "view_zone_sessions",
+                "view_all_sessions",
+                "review_safety_events",
+                "create_work_order",
+                "approve_work_order",
+                "generate_reports",
+                "configure_alerts",
+                "export_compliance_data"
+            ]
+        }
+    }
+}

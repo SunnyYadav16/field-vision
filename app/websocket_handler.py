@@ -64,19 +64,20 @@ class ConnectionManager:
         self.gemini_service = get_gemini_service()
         self.audit_logger = get_audit_logger()
     
-    async def connect(self, websocket: WebSocket) -> "ClientConnection":
-        """Accept a new WebSocket connection"""
+    async def connect(self, websocket: WebSocket, session_user: dict = None) -> "ClientConnection":
+        """Accept a new WebSocket connection with optional user context"""
         await websocket.accept()
         
         connection_id = str(uuid.uuid4())
         connection = ClientConnection(
             connection_id=connection_id,
             websocket=websocket,
-            manager=self
+            manager=self,
+            session_user=session_user
         )
         self.active_connections[connection_id] = connection
         
-        logger.info("client_connected", connection_id=connection_id)
+        logger.info("client_connected", connection_id=connection_id, user_id=session_user.get("user_id") if session_user else None)
         return connection
     
     async def disconnect(self, connection_id: str) -> None:
@@ -98,11 +99,13 @@ class ClientConnection:
         self,
         connection_id: str,
         websocket: WebSocket,
-        manager: ConnectionManager
+        manager: ConnectionManager,
+        session_user: dict = None
     ):
         self.connection_id = connection_id
         self.websocket = websocket
         self.manager = manager
+        self.session_user = session_user  # User context for permission checks
         self.session: Optional[LiveSession] = None
         self.session_id: Optional[str] = None
         self._audio_queue: asyncio.Queue = asyncio.Queue()

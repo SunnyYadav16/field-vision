@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FieldVision - Login</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-900 min-h-screen flex items-center justify-center">
+    <div class="bg-gray-800 p-8 rounded-lg shadow-xl w-96 border border-gray-700">
+        <h1 class="text-2xl font-bold text-amber-400 text-center mb-2">
+            FieldVision
+        </h1>
+        <p class="text-gray-400 text-center text-sm mb-6">
+            Industrial Safety Co-Pilot
+        </p>
+
+        <div id="error" class="hidden bg-red-900/50 border border-red-500
+         text-red-300 px-4 py-2 rounded mb-4 text-sm"></div>
+
+        <div class="space-y-4">
+            <div>
+                <label class="block text-gray-300 text-sm mb-1">Employee ID</label>
+                <input id="userId" type="text" placeholder="e.g. tech_042" class="w-full bg-gray-700 text-white px-4 py-2 rounded
+          border border-gray-600 focus:border-amber-400 focus:outline-none">
+            </div>
+            <div>
+                <label class="block text-gray-300 text-sm mb-1">Password</label>
+                <input id="password" type="password" placeholder="Password" class="w-full bg-gray-700 text-white px-4 py-2 rounded
+          border border-gray-600 focus:border-amber-400 focus:outline-none">
+            </div>
+            <button onclick="doLogin()" class="w-full bg-amber-500 hover:bg-amber-600 text-gray-900
+        font-bold py-2 rounded transition-colors">
+                Sign In
+            </button>
+        </div>
+
+        <!-- Quick-switch buttons for demo -->
+        <div class="mt-6 pt-4 border-t border-gray-700">
+            <p class="text-gray-500 text-xs text-center mb-3">
+                Demo Quick Login</p>
+            <div class="grid grid-cols-2 gap-2">
+                <button onclick="quickLogin('tech_042','field123')" class="text-xs bg-gray-700 text-gray-300 py-2 rounded
+          hover:bg-gray-600">Technician</button>
+                <button onclick="quickLogin('mgr_001','manage101')" class="text-xs bg-gray-700 text-gray-300 py-2 rounded
+          hover:bg-gray-600">Safety Manager</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function doLogin() {
+            const userId = document.getElementById('userId').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('error');
+            errorDiv.classList.add('hidden');
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId, password })
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    errorDiv.textContent = data.error || 'Login failed';
+                    errorDiv.classList.remove('hidden');
+                    return;
+                }
+
+                // Store token and user info
+                localStorage.setItem('fv_token', data.token);
+                localStorage.setItem('fv_user', JSON.stringify(data.user));
+
+                // Route based on role
+                const role = data.user.role;
+                if (role === 'safety_manager' || role === 'supervisor') {
+                    window.location.href = '/manager';
+                } else {
+                    window.location.href = '/';
+                }
+            } catch (err) {
+                errorDiv.textContent = 'Connection error';
+                errorDiv.classList.remove('hidden');
+            }
+        }
+
+        function quickLogin(id, pw) {
+            document.getElementById('userId').value = id;
+            document.getElementById('password').value = pw;
+            doLogin();
+        }
+    </script>
+</body>
+
+</html>

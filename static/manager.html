@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>FieldVision - Safety Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-900 text-white">
+
+    <!-- Header Bar -->
+    <div class="bg-gray-800 border-b border-gray-700 px-4 py-2
+       flex justify-between items-center">
+        <div class="flex items-center gap-3">
+            <span class="text-amber-400 font-bold">FieldVision</span>
+            <span class="text-gray-400">|</span>
+            <span id="userName" class="text-gray-300 text-sm"></span>
+            <span id="userRole" class="text-xs bg-amber-900 text-amber-300 px-2 py-0.5
+        rounded"></span>
+        </div>
+        <button onclick="logout()" class="text-gray-400 text-sm hover:text-red-400">
+            Logout</button>
+    </div>
+
+    <div class="flex h-[calc(100vh-48px)]">
+
+        <!-- Left: Camera Grid (2x2) -->
+        <div class="flex-1 p-4">
+            <div class="grid grid-cols-2 gap-3 h-full">
+                <!-- Camera 1: Live Feed -->
+                <div class="bg-gray-800 rounded-lg overflow-hidden
+             border border-gray-700 relative">
+                    <video id="liveCamera" autoplay muted class="w-full h-full object-cover"></video>
+                    <div class="absolute top-2 left-2 bg-green-600/80
+               text-xs px-2 py-1 rounded">
+                        CAM 1 - Floor A - LIVE</div>
+                </div>
+                <!-- Camera 2-4: Placeholders -->
+                <div class="bg-gray-800 rounded-lg border
+             border-gray-700 flex items-center
+             justify-center text-gray-500">
+                    CAM 2 - Floor A - Offline</div>
+                <div class="bg-gray-800 rounded-lg border
+             border-gray-700 flex items-center
+             justify-center text-gray-500">
+                    CAM 3 - Floor B - Offline</div>
+                <div class="bg-gray-800 rounded-lg border
+             border-gray-700 flex items-center
+             justify-center text-gray-500">
+                    CAM 4 - Exterior - Offline</div>
+            </div>
+        </div>
+
+        <!-- Right: Event Feed + Controls -->
+        <div class="w-96 bg-gray-800 border-l border-gray-700
+         p-4 flex flex-col">
+
+            <!-- Safety Events -->
+            <h2 class="text-amber-400 font-bold mb-3">
+                Live Safety Events</h2>
+            <div id="eventFeed" class="flex-1 overflow-y-auto space-y-2 mb-4">
+                <p class="text-gray-500 text-sm">
+                    Waiting for events...</p>
+            </div>
+
+            <!-- Work Orders (for Task 8) -->
+            <h2 class="text-amber-400 font-bold mb-3">
+                Pending Work Orders</h2>
+            <div id="workOrders" class="space-y-2 mb-4 max-h-48 overflow-y-auto">
+                <p class="text-gray-500 text-sm">
+                    No pending orders</p>
+            </div>
+
+            <!-- Report Button -->
+            <button onclick="generateReport()" class="w-full bg-amber-500 hover:bg-amber-600
+        text-gray-900 font-bold py-2 rounded
+        transition-colors">
+                Generate Compliance Report
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Auth check
+        const token = localStorage.getItem('fv_token');
+        const user = JSON.parse(
+            localStorage.getItem('fv_user') || 'null'
+        );
+        if (!token || !user) window.location.href = '/login';
+        if (user?.role === 'technician')
+            window.location.href = '/';
+
+        document.getElementById('userName')
+            .textContent = user?.name || '';
+        document.getElementById('userRole')
+            .textContent = user?.role?.replace('_', ' ') || '';
+
+        function logout() {
+            localStorage.removeItem('fv_token');
+            localStorage.removeItem('fv_user');
+            window.location.href = '/login';
+        }
+
+        function generateReport() {
+            alert('Report generation (Task 7) - ask Member 1');
+        }
+
+        // You can connect a WebSocket here too to show
+        // live events from any active technician session
+    </script>
+</body>
+
+</html>
