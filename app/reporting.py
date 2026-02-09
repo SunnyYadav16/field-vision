@@ -58,6 +58,17 @@ class AuditReporter:
         try:
             events = self.audit_logger.get_session_events(session_id)
             
+            # Load Transcript
+            transcript = []
+            transcript_file = Path("logs/session_transcript.json")
+            if transcript_file.exists():
+                try:
+                    with open(transcript_file, "r", encoding="utf-8") as f:
+                        all_logs = json.load(f)
+                        transcript = [log for log in all_logs if log.get("session_id") == session_id]
+                except Exception as e:
+                    logger.error("transcript_load_error", error=str(e))
+
             if not events:
                 return "<html><body><h1>Session not found or empty</h1></body></html>"
 
@@ -171,6 +182,16 @@ class AuditReporter:
                     severity_label = severity_labels.get(sev, "UNKNOWN")
                     
                     safe_desc = event.description or "No description provided."
+                    
+                    evidence_html = ""
+                    if event.metadata and event.metadata.get("evidence_url"):
+                        evidence_url = event.metadata.get("evidence_url")
+                        evidence_html = f"""
+                        <div class="mt-3">
+                            <img src="{evidence_url}" class="rounded-lg border border-gray-300 max-w-full h-auto shadow-sm" alt="Safety Evidence">
+                            <p class="text-xs text-gray-400 mt-1 italic">Visual Evidence Captured</p>
+                        </div>
+                        """
                 
                     html += f"""
                                 <div class="flex gap-4 p-4 rounded-lg bg-gray-50 border border-gray-200">
@@ -181,6 +202,7 @@ class AuditReporter:
                                             <span class="font-semibold text-gray-800 uppercase tracking-wide text-xs">{event.event_type.replace('_', ' ')}</span>
                                         </div>
                                         <p class="text-gray-700">{safe_desc}</p>
+                                        {evidence_html}
                                     </div>
                                 </div>
                     """
@@ -188,6 +210,43 @@ class AuditReporter:
                     logger.error("report_render_event_error", error=str(e), event_id=str(event.timestamp))
                     continue
                 
+            html += """
+                        </div>
+                    </div>
+                    
+                    <!-- Conversation Transcript -->
+                    <div class="p-8 bg-slate-50 border-t border-gray-200">
+                        <h2 class="text-xl font-bold mb-6 flex items-center gap-2">
+                            <svg class="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path>
+                            </svg>
+                            Conversation Transcript
+                        </h2>
+                        
+                        <div class="space-y-4">
+            """
+            
+            for log in transcript:
+                speaker = log.get("speaker", "UNKNOWN")
+                content = log.get("content", "")
+                ts = log.get("timestamp", "")
+                try:
+                    time_only = datetime.fromisoformat(ts).strftime('%H:%M:%S')
+                except:
+                    time_only = "--:--:--"
+                
+                bg_color = "bg-blue-100 border-blue-200" if speaker == "USER" else "bg-white border-gray-200"
+                align = "ml-auto text-right" if speaker == "USER" else "mr-auto"
+                
+                html += f"""
+                    <div class="flex flex-col {align} max-w-[80%]">
+                        <div class="flex items-center gap-2 mb-1 {align}">
+                            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{speaker} @ {time_only}</span>
+                        </div>
+                        <div class="p-3 rounded-lg border {bg_color} text-sm shadow-sm">{content}</div>
+                    </div>
+                """
+
             html += """
                         </div>
                     </div>

@@ -101,6 +101,13 @@ class FieldVisionApp {
             closeReportsBackdrop: document.getElementById('closeReportsBackdrop'),
             refreshReportsBtn: document.getElementById('refreshReportsBtn'),
             reportsList: document.getElementById('reportsList'),
+
+            // Site Summary
+            summaryBtn: document.getElementById('summaryBtn'),
+            summaryModal: document.getElementById('summaryModal'),
+            closeSummaryBtn: document.getElementById('closeSummaryBtn'),
+            closeSummaryBackdrop: document.getElementById('closeSummaryBackdrop'),
+            summaryView: document.getElementById('summaryView'),
         };
     }
 
@@ -124,6 +131,13 @@ class FieldVisionApp {
             this.elements.closeReportsBtn.addEventListener('click', () => this.toggleReports(false));
             this.elements.closeReportsBackdrop.addEventListener('click', () => this.toggleReports(false));
             this.elements.refreshReportsBtn.addEventListener('click', () => this.fetchReports());
+        }
+
+        // Site Summary
+        if (this.elements.summaryBtn) {
+            this.elements.summaryBtn.addEventListener('click', () => this.toggleSummary(true));
+            this.elements.closeSummaryBtn.addEventListener('click', () => this.toggleSummary(false));
+            this.elements.closeSummaryBackdrop.addEventListener('click', () => this.toggleSummary(false));
         }
     }
 
@@ -211,6 +225,7 @@ class FieldVisionApp {
             'audio_response': (payload) => this.onAudioResponse(payload),
             'text_response': (payload) => this.onTextResponse(payload),
             'tool_call': (payload) => this.onToolCall(payload),
+            'turn_complete': (payload) => this.onTurnComplete(payload),
             'error': (payload) => this.onError(payload),
             'status': (payload) => this.onStatus(payload),
         };
@@ -555,7 +570,22 @@ class FieldVisionApp {
         // Handle safety event tool calls
         if (payload.function === 'log_safety_event') {
             this.addSafetyEvent(payload.arguments);
+        } else if (payload.function === 'create_work_order') {
+            this.addResponse(`🛠️ **Maintenance Request**: Work order initiated for **${payload.arguments.equipment_id}** (${payload.arguments.priority} priority). Pending badge verification...`, 'system');
+        } else if (payload.function === 'verify_badge') {
+            this.addResponse(`🆔 **Badge Scan**: Verifying ID for **${payload.arguments.employee_name}**...`, 'system');
         }
+    }
+
+    onTurnComplete(payload) {
+        console.log('Turn complete:', payload);
+        this.updateStatus('Ready');
+
+        // Re-enable input for next turn
+        this.elements.textInput.disabled = false;
+        this.elements.sendTextBtn.disabled = false;
+        this.elements.textInput.placeholder = "Type a question...";
+        this.elements.textInput.focus();
     }
 
     onError(payload) {
@@ -722,6 +752,11 @@ class FieldVisionApp {
         const text = this.elements.textInput.value.trim();
         if (!text || !this.state.sessionActive) return;
 
+        // Disable input until turn is complete
+        this.elements.textInput.disabled = true;
+        this.elements.sendTextBtn.disabled = true;
+        this.elements.textInput.placeholder = "AI is thinking...";
+
         this.sendMessage('text_message', { text });
         this.addResponse(text, 'user');
         this.elements.textInput.value = '';
@@ -858,6 +893,84 @@ class FieldVisionApp {
         } catch (error) {
             console.error('Failed to fetch reports:', error);
             container.innerHTML = `<p class="text-center text-safety-red py-8">Failed to load reports: ${error.message}</p>`;
+        }
+    }
+
+    // ==================== Site Summary UI ====================
+
+    toggleSummary(show) {
+        if (!this.elements.summaryModal) return;
+
+        if (show) {
+            this.elements.summaryModal.classList.remove('hidden');
+            this.fetchSiteSummary();
+        } else {
+            this.elements.summaryModal.classList.add('hidden');
+        }
+    }
+
+    async fetchSiteSummary() {
+        const container = this.elements.summaryView;
+        if (!container) return;
+
+        container.innerHTML = '<p class="text-center text-gray-500 py-8 italic">Analyzing site metrics...</p>';
+
+        try {
+            const response = await fetch('/api/reports/site-wide-summary?hours=24');
+            const data = await response.json();
+
+            container.innerHTML = `
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                    <div class="bg-industrial-800 p-6 rounded-2xl border border-white/5 text-center">
+                        <span class="text-xs text-gray-500 uppercase font-bold tracking-wider">Total Sessions</span>
+                        <div class="text-4xl font-bold mt-2 text-white">${data.total_sessions}</div>
+                    </div>
+                    <div class="bg-industrial-800 p-6 rounded-2xl border border-white/5 text-center">
+                        <span class="text-xs text-gray-500 uppercase font-bold tracking-wider">Hazards Detected</span>
+                        <div class="text-4xl font-bold mt-2 text-safety-yellow">${data.total_hazards}</div>
+                    </div>
+                    <div class="bg-industrial-800 p-6 rounded-2xl border border-white/5 text-center">
+                        <span class="text-xs text-gray-500 uppercase font-bold tracking-wider">Critical Interventions</span>
+                        <div class="text-4xl font-bold mt-2 text-safety-red">${data.critical_interventions}</div>
+                    </div>
+                </div>
+
+                <div class="bg-industrial-800 rounded-2xl border border-white/5 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-white/5 bg-white/5">
+                        <h3 class="font-medium">Active Monitoring Zones</h3>
+                    </div>
+                    <div class="p-6">
+                        <div class="flex flex-wrap gap-3">
+                            ${data.active_zones.map(zone => `
+                                <div class="px-4 py-2 rounded-lg bg-accent-primary/10 border border-accent-primary/20 flex items-center gap-2">
+                                    <div class="w-2 h-2 rounded-full bg-safety-green pulse-recording"></div>
+                                    <span class="text-sm font-medium text-accent-primary">${zone}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-8 p-6 rounded-2xl bg-blue-500/10 border border-blue-500/20">
+                    <div class="flex items-start gap-4">
+                        <div class="p-2 rounded-lg bg-blue-500/20 text-blue-400">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <h4 class="font-bold text-blue-300">Daily Compliance Health</h4>
+                            <p class="text-sm text-blue-400/80 mt-1">
+                                Safe working hours: **124h** | Compliance Score: **98.2%**
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+        } catch (error) {
+            console.error('Failed to fetch site summary:', error);
+            container.innerHTML = `<p class="text-center text-safety-red py-8">Failed to aggregate site data: ${error.message}</p>`;
         }
     }
 

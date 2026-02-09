@@ -258,6 +258,32 @@ async def get_session_report(session_id: str):
     return HTMLResponse(content=html, status_code=200)
 
 
+@app.get("/api/reports/site-wide-summary")
+async def get_site_wide_summary(hours: int = Query(24, description="Time window in hours")):
+    """Get summarized activity across all sessions for the dashboard"""
+    audit_logger = get_audit_logger()
+    all_sessions = audit_logger.get_all_sessions()
+    
+    # Filter by time
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    
+    recent_sessions = [
+        s for s in all_sessions 
+        if datetime.fromisoformat(s["start_time"]) > cutoff
+    ]
+    
+    summary = {
+        "window_hours": hours,
+        "total_sessions": len(recent_sessions),
+        "total_hazards": sum(s["event_count"] for s in recent_sessions),
+        "critical_interventions": sum(s["critical_events"] for s in recent_sessions),
+        "active_zones": list(set(s.get("zone", "Zone A") for s in recent_sessions)) # Mock zone if missing
+    }
+    
+    return summary
+
+
 # ── Work Orders API ──
 @app.get("/api/work-orders")
 async def list_work_orders(user: dict = Depends(get_current_user)):

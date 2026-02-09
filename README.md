@@ -14,6 +14,14 @@ FieldVision is a real-time AI copilot for industrial maintenance technicians. It
 - **🔄 Session Resumption** - "New Topic" feature allows seamless context switching
 - **📚 Technical Manual Integration** - Grounded Q&A using cached maintenance documentation
 
+## 💡 Design Decisions
+
+### Single Conversation per Session
+FieldVision enforces a "one conversation per session" model. Each new safety session or topic change initiates a fresh conversation context.
+- **Why?** This ensures a clean state for every interaction, preventing context pollution from previous tasks.
+- **Benefit:** guarantees predictable AI behavior and accurate reporting for each distinct safety value, which is critical for compliance and demo purposes.
+
+
 ## 🏗️ Architecture
 
 ```

@@ -55,10 +55,11 @@ Safety Detection Priorities:
 - Spills, obstructions, or environmental hazards
 
 Communication Style:
-- Be concise and direct - technicians are busy
-- Use clear, actionable language
-- Prioritize safety warnings over other information
-- Reference specific manual sections when applicable
+- Be concise and direct - technicians are busy.
+- Do NOT say 'As an AI' or 'I understand' or 'Certainly'.
+- Speak efficiently like a senior field colleague.
+- Prioritize safety warnings over other information.
+- Reference specific manual sections when applicable.
 
 IMPORTANT: You are an ADVISORY system only. You do NOT control any machinery. All physical actions must be performed by the human technician.
 
@@ -185,10 +186,15 @@ When looking for a badge in the video, search for a card or ID tag being held up
 
     def __init__(self):
         self.settings = get_settings()
-        self.client = genai.Client(api_key=self.settings.gemini_api_key)
-        self.audit_logger = get_audit_logger(self.settings.audit_log_path)
-        self._active_sessions: dict[str, Any] = {}
-        
+        self.client = genai.Client(
+            http_options={'api_version': 'v1alpha'},
+            api_key=self.settings.gemini_api_key
+        )
+        self.audit_logger = get_audit_logger()
+        self._active_sessions: dict[str, "LiveSession"] = {}
+        # Global storage for session histories to survive reconnections
+        self._session_histories: dict[str, list[types.Content]] = {}
+    
     async def create_session(
         self,
         session_config: SessionConfig,
@@ -246,6 +252,9 @@ When looking for a badge in the video, search for a card or ID tag being held up
             ),
         )
         
+        if session_config.session_id not in self._session_histories:
+            self._session_histories[session_config.session_id] = []
+            
         session = LiveSession(
             service=self,
             session_id=session_config.session_id,
@@ -253,7 +262,8 @@ When looking for a badge in the video, search for a card or ID tag being held up
             on_audio=on_audio,
             on_text=on_text,
             on_tool_call=on_tool_call,
-            on_turn_complete=on_turn_complete
+            on_turn_complete=on_turn_complete,
+            history=self._session_histories[session_config.session_id]
         )
         
         self._active_sessions[session_config.session_id] = session
@@ -277,17 +287,44 @@ When looking for a badge in the video, search for a card or ID tag being held up
             Tool response to send back to Gemini
         """
         if function_name == "log_safety_event":
+            # Phase 2: capture visual proof if available
+            evidence_url = None
+            session = self._active_sessions.get(session_id)
+            
+            if session and session._latest_frame and arguments.get("severity", 1) >= 3:
+                try:
+                    import os
+                    from pathlib import Path
+                    
+                    # Create evidence directory
+                    evidence_dir = Path("static/evidence")
+                    evidence_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    filename = f"evidence_{session_id}_{timestamp}.jpg"
+                    filepath = evidence_dir / filename
+                    
+                    with open(filepath, "wb") as f:
+                        f.write(session._latest_frame)
+                    
+                    evidence_url = f"/static/evidence/{filename}"
+                    logger.info("evidence_captured", path=str(filepath), session_id=session_id)
+                except Exception as e:
+                    logger.error("evidence_capture_failed", error=str(e), session_id=session_id)
+
             event = await self.audit_logger.log_event(
                 session_id=session_id,
                 event_type=arguments.get("event_type", "unknown"),
                 severity=arguments.get("severity", 1),
                 description=arguments.get("description", ""),
-                source="ai"
+                source="ai",
+                metadata={"evidence_url": evidence_url} if evidence_url else {}
             )
             
             return {
                 "status": "logged",
                 "event_id": event.timestamp,
+                "evidence_captured": True if evidence_url else False,
                 "message": f"Safety event '{arguments.get('event_type')}' logged successfully"
             }
         
@@ -417,7 +454,8 @@ class LiveSession:
         on_audio: Callable[[bytes], Any],
         on_text: Callable[[str], Any],
         on_tool_call: Callable[[str, dict], Any],
-        on_turn_complete: Optional[Callable[[], Any]] = None
+        on_turn_complete: Optional[Callable[[], Any]] = None,
+        history: list[types.Content] = None
     ):
         self.service = service
         self.session_id = session_id
@@ -426,21 +464,25 @@ class LiveSession:
         self.on_text = on_text
         self.on_tool_call = on_tool_call
         self.on_turn_complete = on_turn_complete
+        self.history = history if history is not None else []
         self._session = None
         self._session_context = None
         self._running = False
         self._resume_handle: Optional[str] = None
         self.pending_work_order: dict = {}  # State for chained tool calls
         self._receive_task: Optional[asyncio.Task] = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
         
-        # Explicit History Tracking
-        self.history: list[types.Content] = []
+        # Turn Parts Accumulator
         self._current_ai_response_parts: list[types.Part] = []
         
-        # Turn Completion Tracking (5s Fallback Timer)
+        # Turn Completion Tracking (faster 2.5s fallback)
         self._turn_in_progress = False
         self._turn_complete_timer: Optional[asyncio.Task] = None
-        self._turn_complete_timeout: float = 5.0  # seconds of silence to trigger turn_complete
+        self._turn_complete_timeout: float = 2.5  # Snappier fallback
+        
+        # Phase 2: Visual Evidence Buffer
+        self._latest_frame: Optional[bytes] = None
         
     @property
     def resume_handle(self) -> Optional[str]:
@@ -464,6 +506,21 @@ class LiveSession:
         # Start receiving responses in background
         self._receive_task = asyncio.create_task(self._receive_loop())
         
+        # Start heartbeat to prevent 1011 keepalive timeouts
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        
+        # Handle session re-hydration: replay history if it exists
+        if self.history:
+            logger.info("rehydrating_session", 
+                        history_turns=len(self.history), 
+                        session_id=self.session_id)
+            await self._session.send(
+                input=types.LiveClientContent(
+                    turns=self.history,
+                    turn_complete=True
+                )
+            )
+        
         logger.info("connected_to_gemini", session_id=self.session_id)
     
     async def disconnect(self) -> None:
@@ -479,6 +536,13 @@ class LiveSession:
             self._receive_task.cancel()
             try:
                 await self._receive_task
+            except asyncio.CancelledError:
+                pass
+                
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
             except asyncio.CancelledError:
                 pass
         
@@ -542,6 +606,9 @@ class LiveSession:
             return  # Skip oversized frames instead of truncating
         
         try:
+            # Buffer the frame for Phase 2 evidence capture
+            self._latest_frame = jpeg_data
+            
             await self._session.send(
                 input=types.LiveClientRealtimeInput(
                     media_chunks=[
@@ -556,7 +623,13 @@ class LiveSession:
             logger.error("send_video_error", error=str(e), session_id=self.session_id)
     
     async def send_text(self, text: str) -> None:
-        """Send a text message to Gemini with active history injection"""
+        """Send a text message to Gemini.
+        
+        The Gemini Live API maintains conversation context internally via
+        the persistent bidirectional stream. We only send the NEW user
+        message — not the full history. Resending full history causes
+        duplicate/confused context and breaks multi-turn sessions.
+        """
         if not self._session or not self._running:
             return
         
@@ -570,24 +643,56 @@ class LiveSession:
             logger.warning("text_too_long", length=len(text), max_length=max_text_length)
             text = text[:max_text_length]
         
-        # Add user message to local history
+        # Track in local history for logging/reporting only
         user_content = types.Content(
             role="user",
             parts=[types.Part(text=text.strip())]
         )
         self.history.append(user_content)
         
+        # Phase 2: Log user interaction to transcript
+        from app.conversation_logger import conversation_logger
+        asyncio.create_task(conversation_logger.log_interaction(self.session_id, {
+            "speaker": "USER",
+            "type": "question",
+            "content": text.strip()
+        }))
+        
         try:
-            # Send the entire conversation history for context persistence
+            # Send ONLY the new user message — Gemini Live API keeps
+            # its own internal conversation context across the stream.
             await self._session.send(
                 input=types.LiveClientContent(
-                    turns=self.history,
+                    turns=[user_content],
                     turn_complete=True
                 )
             )
-            logger.debug("sent_text_with_history", turns=len(self.history), session_id=self.session_id)
+            logger.debug("sent_text",
+                         text_preview=text[:50],
+                         history_len=len(self.history),
+                         session_id=self.session_id)
         except Exception as e:
             logger.error("send_text_error", error=str(e), session_id=self.session_id)
+
+    async def _heartbeat_loop(self) -> None:
+        """Periodic pulse to keep the WebSocket connection alive"""
+        try:
+            while self._running:
+                await asyncio.sleep(10)  # Pulse every 10 seconds (faster to stay alive)
+                if self._session and self._running:
+                    try:
+                        # Send a minimal content pulse or empty realtime input
+                        # This keeps the underlying TCP/WebSocket connection active
+                        await self._session.send(
+                            input=types.LiveClientRealtimeInput(
+                                media_chunks=[]
+                            )
+                        )
+                        logger.debug("heartbeat_sent", session_id=self.session_id)
+                    except Exception as e:
+                        logger.debug("heartbeat_failed", error=str(e))
+        except asyncio.CancelledError:
+            pass
     
     async def _receive_loop(self) -> None:
         """Background task to receive responses from Gemini"""
@@ -635,6 +740,15 @@ class LiveSession:
                     # Handle text
                     if hasattr(part, 'text') and part.text:
                         await self.on_text(part.text)
+                        
+                        # Phase 2: Log AI interaction to transcript
+                        from app.conversation_logger import conversation_logger
+                        asyncio.create_task(conversation_logger.log_interaction(self.session_id, {
+                            "speaker": "AI",
+                            "type": "answer",
+                            "content": part.text
+                        }))
+                        
                         # Add to AI turn accumulator
                         self._current_ai_response_parts.append(types.Part(text=part.text))
                         # Reset timer
@@ -646,9 +760,17 @@ class LiveSession:
         
         # Handle tool calls
         if hasattr(response, 'tool_call') and response.tool_call:
-            for fc in response.tool_call.function_calls:
                 # Notify callback
                 await self.on_tool_call(fc.name, dict(fc.args))
+                
+                # Phase 2: Log Tool Call to transcript
+                from app.conversation_logger import conversation_logger
+                asyncio.create_task(conversation_logger.log_interaction(self.session_id, {
+                    "speaker": "SYSTEM",
+                    "type": "tool_call",
+                    "content": f"AI requested tool: {fc.name}",
+                    "metadata": {"function": fc.name, "args": dict(fc.args)}
+                }))
                 
                 # Check for reset of timer if it was a lengthy tool call
                 self._reset_turn_complete_timer()
@@ -708,11 +830,11 @@ class LiveSession:
         
         # Combine accumulated AI parts into history turn
         if self._current_ai_response_parts:
+            # Append to shared history
             self.history.append(types.Content(
                 role="model",
-                parts=self._current_ai_response_parts
-            )
-            )
+                parts=list(self._current_ai_response_parts)
+            ))
             self._current_ai_response_parts = []
             
         # Fire callback to notify user/client they can ask the next question

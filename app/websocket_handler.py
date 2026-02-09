@@ -41,6 +41,7 @@ class MessageType(str, Enum):
     TOOL_CALL = "tool_call"
     ERROR = "error"
     STATUS = "status"
+    TURN_COMPLETE = "turn_complete"
 
 
 @dataclass
@@ -182,7 +183,8 @@ class ClientConnection:
                 session_config=config,
                 on_audio=self._on_audio_response,
                 on_text=self._on_text_response,
-                on_tool_call=self._on_tool_call
+                on_tool_call=self._on_tool_call,
+                on_turn_complete=self._on_turn_complete
             )
             
             await self.session.connect()
@@ -294,6 +296,12 @@ class ClientConnection:
         await self._send_message(MessageType.TOOL_CALL, {
             "function": function_name,
             "arguments": arguments
+        })
+    
+    async def _on_turn_complete(self) -> None:
+        """Callback for when Gemini finishes its turn"""
+        await self._send_message(MessageType.TURN_COMPLETE, {
+            "message": "Turn complete"
         })
     
     async def _send_message(self, msg_type: MessageType, payload: dict) -> None:
