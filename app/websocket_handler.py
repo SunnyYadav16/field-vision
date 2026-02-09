@@ -1,6 +1,6 @@
 """
 FieldVision WebSocket Handler
-Manages browser<->server<->Gemini communication
+Manages browser<->server<->Gemini communication via ADK bidi-streaming
 """
 
 import asyncio
@@ -13,7 +13,10 @@ from enum import Enum
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
-from .gemini_service import get_gemini_service, SessionConfig, LiveSession
+from google.adk.agents.live_request_queue import LiveRequestQueue
+from google.genai import types
+
+from .gemini_service import runner, build_run_config, get_or_create_session
 from .audit import get_audit_logger
 from .manual_loader import get_manual_loader, validate_manual_context
 
@@ -66,7 +69,6 @@ class ConnectionManager:
     
     def __init__(self):
         self.active_connections: dict[str, "ClientConnection"] = {}
-        self.gemini_service = get_gemini_service()
         self.audit_logger = get_audit_logger()
     
     async def connect(self, websocket: WebSocket, session_user: dict = None) -> "ClientConnection":
@@ -97,7 +99,7 @@ class ConnectionManager:
 class ClientConnection:
     """
     Represents a single client WebSocket connection.
-    Bridges browser and Gemini Live session.
+    Bridges browser and Gemini Live session via ADK bidi-streaming.
     """
     
     def __init__(
@@ -111,10 +113,11 @@ class ClientConnection:
         self.websocket = websocket
         self.manager = manager
         self.session_user = session_user  # User context for permission checks
-        self.session: Optional[LiveSession] = None
         self.session_id: Optional[str] = None
-        self._audio_queue: asyncio.Queue = asyncio.Queue()
+        self.live_queue: Optional[LiveRequestQueue] = None
+        self._downstream_task: Optional[asyncio.Task] = None
         self._send_lock = asyncio.Lock()
+        self._is_session_active = False
     
     async def handle_messages(self) -> None:
         """Main message handling loop"""
@@ -147,12 +150,13 @@ class ClientConnection:
             logger.warning("unknown_message_type", type=message.type)
     
     async def _handle_start_session(self, payload: dict) -> None:
-        """Start a new Gemini Live session"""
-        if self.session:
+        """Start a new Gemini Live session using ADK bidi-streaming"""
+        if self._is_session_active:
             await self._send_error("Session already active")
             return
         
         self.session_id = str(uuid.uuid4())
+        user_id = self.session_user.get("user_id", "anonymous") if self.session_user else "anonymous"
         
         # Load manual context (from payload or default)
         manual_context = payload.get("manual_context")
@@ -169,25 +173,26 @@ class ClientConnection:
             await self._send_error(f"Invalid manual context: {error_msg}")
             return
         
-        # Create session config
-        config = SessionConfig(
-            session_id=self.session_id,
-            system_instruction=payload.get("system_instruction"),
-            manual_context=manual_context,
-            resume_handle=payload.get("resume_handle")
-        )
-        
         try:
-            # Create Gemini session with callbacks
-            self.session = await self.manager.gemini_service.create_session(
-                session_config=config,
-                on_audio=self._on_audio_response,
-                on_text=self._on_text_response,
-                on_tool_call=self._on_tool_call,
-                on_turn_complete=self._on_turn_complete
+            # Create ADK session
+            await get_or_create_session(user_id=user_id, session_id=self.session_id)
+            
+            # Build the run config for bidi-streaming
+            run_config = build_run_config()
+            
+            # Create the LiveRequestQueue for sending data to the model
+            self.live_queue = LiveRequestQueue()
+            
+            # Start the downstream task that reads events from run_live()
+            self._downstream_task = asyncio.create_task(
+                self._run_downstream(
+                    user_id=user_id,
+                    session_id=self.session_id,
+                    run_config=run_config
+                )
             )
             
-            await self.session.connect()
+            self._is_session_active = True
             
             # Log session start
             await self.manager.audit_logger.log_event(
@@ -207,13 +212,131 @@ class ClientConnection:
             logger.error("session_start_failed", error=str(e))
             await self._send_error(f"Failed to start session: {str(e)}")
     
+    async def _run_downstream(self, user_id: str, session_id: str, run_config) -> None:
+        """
+        Downstream task: consume events from runner.run_live() and 
+        forward them to the WebSocket client as typed messages.
+        """
+        try:
+            async for event in runner.run_live(
+                user_id=user_id,
+                session_id=session_id,
+                live_request_queue=self.live_queue,
+                run_config=run_config
+            ):
+                # Parse the event and send appropriate messages to the client
+                await self._process_event(event)
+                
+        except asyncio.CancelledError:
+            logger.info("downstream_task_cancelled", session_id=session_id)
+        except Exception as e:
+            logger.error("downstream_task_error", error=str(e), session_id=session_id)
+            try:
+                await self._send_error(f"Stream error: {str(e)}")
+            except Exception:
+                pass  # WebSocket might already be closed
+
+    async def _process_event(self, event) -> None:
+        """
+        Process a single ADK event and forward to the WebSocket client.
+        Events can contain partial text, audio chunks, tool calls, 
+        transcriptions, and turn completion signals.
+        """
+        try:
+            # Check if the event has content parts
+            if hasattr(event, 'content') and event.content and hasattr(event.content, 'parts'):
+                for part in event.content.parts:
+                    # Handle text responses
+                    if hasattr(part, 'text') and part.text:
+                        await self._send_message(MessageType.TEXT_RESPONSE, {
+                            "text": part.text
+                        })
+                    
+                    # Handle audio responses (inline_data with audio)
+                    if hasattr(part, 'inline_data') and part.inline_data:
+                        if part.inline_data.mime_type and 'audio' in part.inline_data.mime_type:
+                            audio_b64 = base64.b64encode(part.inline_data.data).decode("utf-8")
+                            await self._send_message(MessageType.AUDIO_RESPONSE, {
+                                "data": audio_b64,
+                                "mime_type": part.inline_data.mime_type
+                            })
+            
+            # Check for server content (audio from bidi streaming)
+            if hasattr(event, 'server_content') and event.server_content:
+                sc = event.server_content
+                
+                # Model turn parts (audio/text in streaming)
+                if hasattr(sc, 'model_turn') and sc.model_turn and hasattr(sc.model_turn, 'parts'):
+                    for part in sc.model_turn.parts:
+                        if hasattr(part, 'text') and part.text:
+                            await self._send_message(MessageType.TEXT_RESPONSE, {
+                                "text": part.text
+                            })
+                        if hasattr(part, 'inline_data') and part.inline_data:
+                            if part.inline_data.data:
+                                audio_b64 = base64.b64encode(part.inline_data.data).decode("utf-8")
+                                await self._send_message(MessageType.AUDIO_RESPONSE, {
+                                    "data": audio_b64,
+                                    "mime_type": part.inline_data.mime_type or "audio/pcm;rate=24000"
+                                })
+                
+                # Turn complete signal
+                if hasattr(sc, 'turn_complete') and sc.turn_complete:
+                    await self._send_message(MessageType.TURN_COMPLETE, {
+                        "message": "Turn complete"
+                    })
+                
+                # Input transcription (what the user said)
+                if hasattr(sc, 'input_transcription') and sc.input_transcription:
+                    if hasattr(sc.input_transcription, 'text') and sc.input_transcription.text:
+                        await self._send_message(MessageType.STATUS, {
+                            "type": "input_transcription",
+                            "text": sc.input_transcription.text
+                        })
+                
+                # Output transcription (what the model said, text version of audio)
+                if hasattr(sc, 'output_transcription') and sc.output_transcription:
+                    if hasattr(sc.output_transcription, 'text') and sc.output_transcription.text:
+                        await self._send_message(MessageType.TEXT_RESPONSE, {
+                            "text": sc.output_transcription.text
+                        })
+
+            # Check for tool calls
+            if hasattr(event, 'tool_calls') and event.tool_calls:
+                for tool_call in event.tool_calls:
+                    await self._send_message(MessageType.TOOL_CALL, {
+                        "function": tool_call.function.name if hasattr(tool_call, 'function') else str(tool_call),
+                        "arguments": dict(tool_call.function.args) if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'args') else {}
+                    })
+
+            # Check for actions/function calls (ADK style)
+            if hasattr(event, 'actions') and event.actions and hasattr(event.actions, 'function_calls'):
+                for fc in event.actions.function_calls:
+                    await self._send_message(MessageType.TOOL_CALL, {
+                        "function": fc.name,
+                        "arguments": dict(fc.args) if fc.args else {}
+                    })
+
+        except Exception as e:
+            logger.error("event_processing_error", error=str(e))
+    
     async def _handle_end_session(self, payload: dict) -> None:
         """End the current Gemini session"""
-        if self.session:
+        if self._is_session_active:
             # Get session summary before ending
             summary = await self.manager.audit_logger.get_session_summary(self.session_id)
             
-            await self.session.disconnect()
+            # Close the live queue to stop the downstream task
+            if self.live_queue:
+                self.live_queue.close()
+            
+            # Cancel the downstream task
+            if self._downstream_task and not self._downstream_task.done():
+                self._downstream_task.cancel()
+                try:
+                    await self._downstream_task
+                except asyncio.CancelledError:
+                    pass
             
             # Log session end
             await self.manager.audit_logger.log_event(
@@ -226,31 +349,37 @@ class ClientConnection:
             
             await self._send_message(MessageType.SESSION_ENDED, {
                 "session_id": self.session_id,
-                "summary": summary,
-                "resume_handle": self.session.resume_handle
+                "summary": summary
             })
             
             # Clean up camera feed for this user
             if self.session_user:
                 active_camera_feeds.pop(self.session_user.get("user_id"), None)
             
-            self.session = None
+            self._is_session_active = False
+            self.live_queue = None
+            self._downstream_task = None
             self.session_id = None
     
     async def _handle_audio_data(self, payload: dict) -> None:
-        """Forward audio data to Gemini"""
-        if not self.session:
+        """Forward audio data to Gemini via LiveRequestQueue"""
+        if not self._is_session_active or not self.live_queue:
             return
             
         # Decode base64 audio
         audio_b64 = payload.get("data", "")
         audio_bytes = base64.b64decode(audio_b64)
         
-        await self.session.send_audio(audio_bytes)
+        # Send as real-time blob
+        audio_blob = types.Blob(
+            mime_type="audio/pcm;rate=16000",
+            data=audio_bytes
+        )
+        self.live_queue.send_realtime(audio_blob)
     
     async def _handle_video_frame(self, payload: dict) -> None:
-        """Forward video frame to Gemini and store for manager view"""
-        if not self.session:
+        """Forward video frame to Gemini via LiveRequestQueue and store for manager view"""
+        if not self._is_session_active or not self.live_queue:
             return
             
         # Decode base64 JPEG
@@ -266,43 +395,25 @@ class ClientConnection:
                 "role": self.session_user.get("role", "technician")
             }
         
-        await self.session.send_video_frame(frame_bytes)
+        # Send as real-time blob
+        video_blob = types.Blob(
+            mime_type="image/jpeg",
+            data=frame_bytes
+        )
+        self.live_queue.send_realtime(video_blob)
     
     async def _handle_text_message(self, payload: dict) -> None:
-        """Forward text message to Gemini"""
-        if not self.session:
+        """Forward text message to Gemini via LiveRequestQueue"""
+        if not self._is_session_active or not self.live_queue:
             return
             
         text = payload.get("text", "")
         if text:
-            await self.session.send_text(text)
-    
-    async def _on_audio_response(self, audio_data: bytes) -> None:
-        """Callback for audio responses from Gemini"""
-        audio_b64 = base64.b64encode(audio_data).decode("utf-8")
-        await self._send_message(MessageType.AUDIO_RESPONSE, {
-            "data": audio_b64,
-            "mime_type": "audio/pcm;rate=24000"
-        })
-    
-    async def _on_text_response(self, text: str) -> None:
-        """Callback for text responses from Gemini"""
-        await self._send_message(MessageType.TEXT_RESPONSE, {
-            "text": text
-        })
-    
-    async def _on_tool_call(self, function_name: str, arguments: dict) -> None:
-        """Callback for tool calls from Gemini"""
-        await self._send_message(MessageType.TOOL_CALL, {
-            "function": function_name,
-            "arguments": arguments
-        })
-    
-    async def _on_turn_complete(self) -> None:
-        """Callback for when Gemini finishes its turn"""
-        await self._send_message(MessageType.TURN_COMPLETE, {
-            "message": "Turn complete"
-        })
+            content = types.Content(
+                role="user",
+                parts=[types.Part(text=text)]
+            )
+            self.live_queue.send_content(content)
     
     async def _send_message(self, msg_type: MessageType, payload: dict) -> None:
         """Send a message to the client"""
@@ -316,8 +427,16 @@ class ClientConnection:
     
     async def cleanup(self) -> None:
         """Clean up connection resources"""
-        if self.session:
-            await self.session.disconnect()
+        if self._is_session_active:
+            if self.live_queue:
+                self.live_queue.close()
+            if self._downstream_task and not self._downstream_task.done():
+                self._downstream_task.cancel()
+                try:
+                    await self._downstream_task
+                except asyncio.CancelledError:
+                    pass
+            self._is_session_active = False
 
 
 # Connection manager singleton

@@ -2,17 +2,20 @@
 
 **AI-Powered Industrial Safety Assistant**
 
-FieldVision is a real-time AI copilot for industrial maintenance technicians. It uses Google's Gemini Live API to provide hands-free voice interaction, continuous visual safety monitoring, and automated compliance logging.
+FieldVision is a real-time AI copilot for industrial maintenance technicians. Built on the **Google Agent Development Kit (ADK)** with Gemini's bidi-streaming Live API, it provides hands-free voice interaction, continuous visual safety monitoring, and automated compliance logging.
 
 ![FieldVision Demo](docs/demo.gif)
 
 ## ✨ Features
 
-- **🎥 Real-Time Video Analysis** - Continuous monitoring for safety hazards, PPE compliance, and procedure verification
-- **🎤 Hands-Free Voice Interface** - Full two-way audio conversation using Gemini Live API
-- **� Automated Reporting** - Generates PDF-ready HTML reports with AI executive summaries
-- **🔄 Session Resumption** - "New Topic" feature allows seamless context switching
-- **📚 Technical Manual Integration** - Grounded Q&A using cached maintenance documentation
+- **🎥 Real-Time Video Analysis** — Continuous monitoring for safety hazards, PPE compliance, and procedure verification
+- **🎤 Hands-Free Voice Interface** — Full two-way audio conversation using Gemini Live API with bidi-streaming
+- **💬 Multi-Turn Text & Audio Q&A** — Ask multiple questions via text or voice within the same session; proper conversation history is maintained across turns
+- **📊 Automated Reporting** — Generates PDF-ready HTML reports with AI executive summaries and audit logs
+- **🔄 Session Resumption** — "New Topic" feature allows seamless context switching without reloading
+- **📚 Technical Manual Integration** — Grounded Q&A using cached maintenance documentation
+- **🔐 Role-Based Login** — Simple auth system with technician/manager roles
+- **🛠️ AI Tool Calling** — Automated safety event logging, work order creation, and badge verification via function calling
 
 ## 💡 Design Decisions
 
@@ -25,12 +28,12 @@ FieldVision enforces a "one conversation per session" model. Each new safety ses
 ## 🏗️ Architecture
 
 ```
-┌─────────────────┐     WebSocket      ┌─────────────────┐     gRPC/HTTPS     ┌─────────────────┐
-│                 │ ◄─────────────────► │                 │ ◄─────────────────► │                 │
-│     Browser     │   Audio + Video     │  FastAPI Server │   Bidirectional     │  Gemini Live    │
-│   (Camera/Mic)  │                     │   (Python)      │     Streaming       │      API        │
-│                 │ ◄─────────────────► │                 │ ◄─────────────────► │                 │
-└─────────────────┘   AI Responses      └─────────────────┘   Audio + Tooling   └─────────────────┘
+┌─────────────────┐     WebSocket      ┌─────────────────┐    ADK Runner     ┌─────────────────┐
+│                 │ ◄─────────────────► │                 │ ◄───────────────► │                 │
+│     Browser     │  Audio/Video/Text   │  FastAPI Server │  LiveRequestQueue │  Gemini Live    │
+│   (Camera/Mic)  │                     │   + ADK Agent   │  Bidi-Streaming   │      API        │
+│                 │ ◄─────────────────► │                 │ ◄───────────────► │                 │
+└─────────────────┘   AI Responses      └─────────────────┘  Audio + Tools    └─────────────────┘
                                                 │
                                                 ▼
                                         ┌─────────────────┐
@@ -95,19 +98,24 @@ Open your browser to: **http://localhost:8000**
 ```
 field-vision/
 ├── app/
-│   ├── __init__.py          # Package exports
-│   ├── config.py             # Pydantic settings
-│   ├── audit.py              # Safety event logging
-│   ├── gemini_service.py     # Gemini Live API client
-│   └── websocket_handler.py  # WebSocket connection manager
+│   ├── __init__.py            # Package exports
+│   ├── config.py               # Pydantic settings
+│   ├── audit.py                # Safety event logging
+│   ├── fieldvision_agent.py    # ADK Agent definition + tools
+│   ├── gemini_service.py       # ADK Runner, session mgmt, RunConfig
+│   └── websocket_handler.py    # WebSocket ↔ ADK bidi-streaming bridge
 ├── static/
-│   ├── index.html            # Main UI
-│   └── app.js                # Frontend application
+│   ├── index.html              # Main UI
+│   ├── app.js                  # Frontend application
+│   ├── login.html              # Login page
+│   └── pcm-processor.js        # AudioWorklet for mic PCM streaming
+├── manuals/
+│   └── safety_manual.md        # Technical manual for grounded Q&A
 ├── logs/
-│   └── audit_log.json        # Safety event audit trail
-├── main.py                   # FastAPI application
-├── requirements.txt          # Python dependencies
-├── .env.example              # Environment template
+│   └── audit_log.json          # Safety event audit trail
+├── main.py                     # FastAPI application
+├── requirements.txt            # Python dependencies
+├── .env.example                # Environment template
 └── README.md
 ```
 
@@ -183,8 +191,10 @@ FieldVision adheres to responsible AI principles:
 
 ## 📈 Future Roadmap
 
+- [x] Multi-turn text & audio Q&A with conversation history
+- [x] PDF-ready HTML compliance report generation
+- [x] Role-based authentication
 - [ ] AR glasses integration for hands-free HUD
-- [ ] PDF compliance report generation
 - [ ] Multi-step LOTO sequence verification
 - [ ] IoT sensor integration
 - [ ] Cloud Run deployment for fleet scaling
