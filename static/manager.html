@@ -43,25 +43,26 @@
 
     <div class="flex h-[calc(100vh-48px)]">
 
-        <!-- Left: Camera Grid (2x2) -->
+        <!-- Left: Camera Grid (2x2) - Dynamic Feeds -->
         <div class="w-1/2 p-4">
-            <div class="grid grid-cols-2 gap-3 h-full">
-                <!-- Camera 1: Live Feed -->
-                <div class="bg-gray-800 rounded-lg overflow-hidden border border-gray-700 relative">
-                    <video id="liveCamera" autoplay muted class="w-full h-full object-cover"></video>
-                    <div class="absolute top-2 left-2 bg-green-600/80 text-xs px-2 py-1 rounded">
-                        CAM 1 - Floor A - LIVE</div>
+            <div class="grid grid-cols-2 gap-3 h-full" id="cameraGrid">
+                <!-- Camera slots will be populated dynamically -->
+                <div
+                    class="cam-slot bg-gray-800 rounded-lg overflow-hidden border border-gray-700 relative flex items-center justify-center text-gray-500">
+                    <span>CAM 1 - Waiting...</span>
                 </div>
-                <!-- Camera 2-4: Placeholders -->
                 <div
-                    class="bg-gray-800 rounded-lg border border-gray-700 flex items-center justify-center text-gray-500">
-                    CAM 2 - Floor A - Offline</div>
+                    class="cam-slot bg-gray-800 rounded-lg overflow-hidden border border-gray-700 relative flex items-center justify-center text-gray-500">
+                    <span>CAM 2 - Waiting...</span>
+                </div>
                 <div
-                    class="bg-gray-800 rounded-lg border border-gray-700 flex items-center justify-center text-gray-500">
-                    CAM 3 - Floor B - Offline</div>
+                    class="cam-slot bg-gray-800 rounded-lg overflow-hidden border border-gray-700 relative flex items-center justify-center text-gray-500">
+                    <span>CAM 3 - Waiting...</span>
+                </div>
                 <div
-                    class="bg-gray-800 rounded-lg border border-gray-700 flex items-center justify-center text-gray-500">
-                    CAM 4 - Exterior - Offline</div>
+                    class="cam-slot bg-gray-800 rounded-lg overflow-hidden border border-gray-700 relative flex items-center justify-center text-gray-500">
+                    <span>CAM 4 - Waiting...</span>
+                </div>
             </div>
         </div>
 
@@ -128,9 +129,67 @@
             </div>
 
             <!-- Generate Report Button -->
-            <button onclick="generateReport()" class="mt-4 w-full bg-amber-500 hover:bg-amber-600
+            <button onclick="openReportModal()" class="mt-4 w-full bg-amber-500 hover:bg-amber-600
                 text-gray-900 font-bold py-2 rounded transition-colors">
-                Generate Compliance Report
+                📊 Generate Compliance Report
+            </button>
+        </div>
+    </div>
+
+    <!-- Report Timeline Modal -->
+    <div id="reportModal" class="fixed inset-0 bg-black/70 hidden items-center justify-center z-50">
+        <div class="bg-gray-800 rounded-lg p-6 w-[420px] border border-gray-600 shadow-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-bold text-amber-400">📊 Generate Report</h2>
+                <button onclick="closeReportModal()" class="text-gray-400 hover:text-white text-2xl">&times;</button>
+            </div>
+
+            <p class="text-gray-300 text-sm mb-4">Select a time range for the compliance report:</p>
+
+            <!-- Preset Buttons -->
+            <div class="grid grid-cols-3 gap-2 mb-4">
+                <button onclick="setPreset('24h')"
+                    class="preset-btn bg-gray-700 hover:bg-gray-600 py-2 rounded text-sm">
+                    Last 24 Hours</button>
+                <button onclick="setPreset('7d')" class="preset-btn bg-gray-700 hover:bg-gray-600 py-2 rounded text-sm">
+                    Last 7 Days</button>
+                <button onclick="setPreset('30d')"
+                    class="preset-btn bg-gray-700 hover:bg-gray-600 py-2 rounded text-sm">
+                    Last 30 Days</button>
+                <button onclick="setPreset('3m')" class="preset-btn bg-gray-700 hover:bg-gray-600 py-2 rounded text-sm">
+                    Last 3 Months</button>
+                <button onclick="setPreset('6m')" class="preset-btn bg-gray-700 hover:bg-gray-600 py-2 rounded text-sm">
+                    Last 6 Months</button>
+                <button onclick="setPreset('custom')"
+                    class="preset-btn bg-gray-700 hover:bg-gray-600 py-2 rounded text-sm">
+                    Custom Range</button>
+            </div>
+
+            <!-- Custom Date Picker (hidden by default) -->
+            <div id="customDatePicker" class="hidden mb-4 p-3 bg-gray-900 rounded">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs text-gray-400">Start Date</label>
+                        <input type="date" id="startDate"
+                            class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-400">End Date</label>
+                        <input type="date" id="endDate"
+                            class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Selected Range Display -->
+            <div id="selectedRange" class="text-center text-sm text-gray-400 mb-4">
+                Select a time range above
+            </div>
+
+            <!-- Generate Button -->
+            <button id="generateBtn" onclick="downloadReport()" disabled class="w-full bg-amber-500 hover:bg-amber-600 disabled:bg-gray-600 disabled:cursor-not-allowed
+                text-gray-900 font-bold py-2 rounded transition-colors">
+                📄 Download PDF Report
             </button>
         </div>
     </div>
@@ -151,14 +210,160 @@
             window.location.href = '/login';
         }
 
-        function generateReport() {
-            alert('Report generation - Coming soon');
+        // ── Report Modal Logic ──
+        let reportStartDate = null;
+        let reportEndDate = null;
+
+        function openReportModal() {
+            document.getElementById('reportModal').classList.remove('hidden');
+            document.getElementById('reportModal').classList.add('flex');
+            resetReportModal();
         }
+
+        function closeReportModal() {
+            document.getElementById('reportModal').classList.add('hidden');
+            document.getElementById('reportModal').classList.remove('flex');
+        }
+
+        function resetReportModal() {
+            reportStartDate = null;
+            reportEndDate = null;
+            document.getElementById('selectedRange').textContent = 'Select a time range above';
+            document.getElementById('generateBtn').disabled = true;
+            document.getElementById('customDatePicker').classList.add('hidden');
+            document.querySelectorAll('.preset-btn').forEach(btn => {
+                btn.classList.remove('bg-amber-600');
+                btn.classList.add('bg-gray-700');
+            });
+        }
+
+        function setPreset(preset) {
+            const now = new Date();
+            reportEndDate = new Date(now);
+
+            // Reset button styles
+            document.querySelectorAll('.preset-btn').forEach(btn => {
+                btn.classList.remove('bg-amber-600');
+                btn.classList.add('bg-gray-700');
+            });
+
+            if (preset === 'custom') {
+                document.getElementById('customDatePicker').classList.remove('hidden');
+                document.getElementById('selectedRange').textContent = 'Select custom dates below';
+
+                // Set up date input listeners
+                document.getElementById('startDate').onchange = updateCustomDates;
+                document.getElementById('endDate').onchange = updateCustomDates;
+                return;
+            }
+
+            document.getElementById('customDatePicker').classList.add('hidden');
+
+            switch (preset) {
+                case '24h':
+                    reportStartDate = new Date(now - 24 * 60 * 60 * 1000);
+                    break;
+                case '7d':
+                    reportStartDate = new Date(now - 7 * 24 * 60 * 60 * 1000);
+                    break;
+                case '30d':
+                    reportStartDate = new Date(now - 30 * 24 * 60 * 60 * 1000);
+                    break;
+                case '3m':
+                    reportStartDate = new Date(now);
+                    reportStartDate.setMonth(reportStartDate.getMonth() - 3);
+                    break;
+                case '6m':
+                    reportStartDate = new Date(now);
+                    reportStartDate.setMonth(reportStartDate.getMonth() - 6);
+                    break;
+            }
+
+            // Highlight selected button
+            event.target.classList.remove('bg-gray-700');
+            event.target.classList.add('bg-amber-600');
+
+            updateRangeDisplay();
+        }
+
+        function updateCustomDates() {
+            const startInput = document.getElementById('startDate').value;
+            const endInput = document.getElementById('endDate').value;
+
+            if (startInput && endInput) {
+                reportStartDate = new Date(startInput);
+                reportEndDate = new Date(endInput);
+                reportEndDate.setHours(23, 59, 59); // End of day
+                updateRangeDisplay();
+            }
+        }
+
+        function updateRangeDisplay() {
+            if (reportStartDate && reportEndDate) {
+                const options = { month: 'short', day: 'numeric', year: 'numeric' };
+                document.getElementById('selectedRange').textContent =
+                    `${reportStartDate.toLocaleDateString('en-US', options)} → ${reportEndDate.toLocaleDateString('en-US', options)}`;
+                document.getElementById('generateBtn').disabled = false;
+            }
+        }
+
+        async function downloadReport() {
+            if (!reportStartDate || !reportEndDate) return;
+
+            const btn = document.getElementById('generateBtn');
+            btn.textContent = '⏳ Generating...';
+            btn.disabled = true;
+
+            try {
+                const start = reportStartDate.toISOString();
+                const end = reportEndDate.toISOString();
+
+                const res = await fetch(
+                    `/api/reports/work-orders?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+                    { headers: { 'Authorization': `Bearer ${token}` } }
+                );
+
+                if (!res.ok) throw new Error('Failed to generate report');
+
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `work_orders_report.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+
+                closeReportModal();
+            } catch (err) {
+                console.error('Report generation failed:', err);
+                alert('Failed to generate report. Please try again.');
+            } finally {
+                btn.textContent = '📄 Download PDF Report';
+                btn.disabled = false;
+            }
+        }
+
+        // Close modal when clicking backdrop
+        document.getElementById('reportModal').addEventListener('click', (e) => {
+            if (e.target.id === 'reportModal') closeReportModal();
+        });
+
+        // Track expanded orders to persist across refreshes
+        const expandedOrders = new Set();
 
         // Toggle order details
         function toggleOrderDetails(orderId) {
             const card = document.getElementById(`order-${orderId}`);
-            if (card) card.classList.toggle('expanded');
+            if (card) {
+                card.classList.toggle('expanded');
+                if (card.classList.contains('expanded')) {
+                    expandedOrders.add(orderId);
+                } else {
+                    expandedOrders.delete(orderId);
+                }
+            }
         }
 
         // Priority badge classes
@@ -288,6 +493,12 @@
                     ? completed.map(o => renderOrderCard(o, 'completed')).join('')
                     : '<p class="text-gray-500 text-sm">No completed orders</p>';
 
+                // Restore expanded states after re-render
+                expandedOrders.forEach(orderId => {
+                    const card = document.getElementById(`order-${orderId}`);
+                    if (card) card.classList.add('expanded');
+                });
+
             } catch (err) {
                 console.error('Failed to load work orders:', err);
             }
@@ -311,9 +522,90 @@
             if (res.ok) loadAllOrders();
         }
 
+        // Close expanded order when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.order-card')) {
+                // Clicked outside any order card - close all
+                expandedOrders.clear();
+                document.querySelectorAll('.order-card.expanded').forEach(card => {
+                    card.classList.remove('expanded');
+                });
+            }
+        });
+
         // Poll every 5 seconds
         setInterval(loadAllOrders, 5000);
         loadAllOrders();
+
+        // ── Camera Feed Polling ──
+        const cameraSlots = document.querySelectorAll('.cam-slot');
+        let activeFeedUsers = [];
+
+        async function loadCameraFeeds() {
+            try {
+                const res = await fetch('/api/camera-feeds', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!res.ok) return;
+
+                const data = await res.json();
+                activeFeedUsers = data.feeds || [];
+
+                // Update camera slots
+                cameraSlots.forEach((slot, index) => {
+                    if (index < activeFeedUsers.length) {
+                        const feed = activeFeedUsers[index];
+                        updateCameraSlot(slot, feed, index + 1);
+                    } else {
+                        // No feed for this slot
+                        slot.innerHTML = `<span class="text-gray-500">CAM ${index + 1} - Offline</span>`;
+                    }
+                });
+            } catch (err) {
+                console.error('Failed to load camera feeds:', err);
+            }
+        }
+
+        function updateCameraSlot(slot, feed, camNum) {
+            const userId = feed.user_id;
+            const imgId = `cam-img-${userId}`;
+
+            // Check if image already exists
+            let img = document.getElementById(imgId);
+            if (!img) {
+                // Create new image element with overlay
+                slot.innerHTML = `
+                    <img id="${imgId}" class="w-full h-full object-cover" alt="Camera feed">
+                    <div class="absolute top-2 left-2 bg-green-600/80 text-xs px-2 py-1 rounded flex items-center gap-1">
+                        <span class="w-2 h-2 bg-white rounded-full animate-pulse"></span>
+                        CAM ${camNum} - ${feed.zone} - LIVE
+                    </div>
+                    <div class="absolute bottom-2 left-2 bg-black/60 text-xs px-2 py-1 rounded">
+                        ${feed.name}
+                    </div>
+                `;
+                img = document.getElementById(imgId);
+            }
+
+            // Fetch frame with auth header and set as blob URL
+            fetch(`/api/camera-feeds/${userId}/frame`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+                .then(res => res.ok ? res.blob() : null)
+                .then(blob => {
+                    if (blob && img) {
+                        const oldSrc = img.src;
+                        img.src = URL.createObjectURL(blob);
+                        // Revoke old blob URL to prevent memory leak
+                        if (oldSrc.startsWith('blob:')) URL.revokeObjectURL(oldSrc);
+                    }
+                })
+                .catch(() => { });
+        }
+
+        // Poll camera feeds every 1 second for smoother updates
+        setInterval(loadCameraFeeds, 1000);
+        loadCameraFeeds();
     </script>
 </body>
 
