@@ -7,7 +7,7 @@ class FieldVisionApp {
     constructor() {
         // Configuration - Optimized for lower bandwidth
         this.config = {
-            wsUrl: `ws://${window.location.host}/ws`,
+            wsUrl: `ws://${window.location.host}/ws?token=${localStorage.getItem('fv_token') || ''}`,
             frameRate: 1,           // 1 FPS for video (can reduce to 0.5 for slower connections)
             jpegQuality: 0.6,       // Reduced from 0.85 for faster transfer
             audioSampleRate: 16000,
