@@ -1,1 +1,18 @@
-[]
+[
+  {
+    "order_id": "WO-20260209120003",
+    "status": "approved",
+    "priority": "critical",
+    "equipment": "Gas System",
+    "description": "Potential gas leak",
+    "requested_by": {
+      "id": "tech_078",
+      "name": "Jordan Kim",
+      "role": "senior_technician"
+    },
+    "badge_verified": true,
+    "created_at": "2026-02-09T17:00:03.029295Z",
+    "approved_at": "2026-02-09T17:00:03.029302Z",
+    "escalated_to": null
+  }
+]
