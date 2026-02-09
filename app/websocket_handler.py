@@ -107,6 +107,8 @@ class ClientConnection:
         self.session_id: Optional[str] = None
         self._audio_queue: asyncio.Queue = asyncio.Queue()
         self._send_lock = asyncio.Lock()
+        self.frame_buffer: list = []
+        self.max_buffer_size: int = 30
     
     async def handle_messages(self) -> None:
         """Main message handling loop"""
@@ -236,14 +238,28 @@ class ClientConnection:
         await self.session.send_audio(audio_bytes)
     
     async def _handle_video_frame(self, payload: dict) -> None:
-        """Forward video frame to Gemini"""
+        """Forward video frame to Gemini and store in buffer"""
         if not self.session:
             return
-            
+        
         # Decode base64 JPEG
         frame_b64 = payload.get("data", "")
         frame_bytes = base64.b64decode(frame_b64)
-        
+    
+        # Store frame in buffer with timestamp
+        from datetime import datetime, timezone
+        self.frame_buffer.append({
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'data': frame_bytes
+        })
+
+        logger.info("frame_stored", buffer_size=len(self.frame_buffer), session_id=self.session_id)
+    
+        # Keep only last 30 frames (30 seconds at 1 FPS)
+        if len(self.frame_buffer) > self.max_buffer_size:
+            self.frame_buffer.pop(0)
+    
+        # Forward to Gemini
         await self.session.send_video_frame(frame_bytes)
     
     async def _handle_text_message(self, payload: dict) -> None:
@@ -271,6 +287,32 @@ class ClientConnection:
     
     async def _on_tool_call(self, function_name: str, arguments: dict) -> None:
         """Callback for tool calls from Gemini"""
+        # Check if screenshot should be captured
+        if function_name == "log_safety_event" and arguments.get("capture_screenshot"):
+            # Get the most recent frame from buffer
+            if self.frame_buffer:
+                # Save screenshot immediately
+                from pathlib import Path
+                from datetime import datetime, timezone
+                import aiofiles
+                
+                screenshot_dir = Path("./evidence")
+                screenshot_dir.mkdir(parents=True, exist_ok=True)
+                
+                timestamp = datetime.now(timezone.utc).isoformat().replace(':', '-').replace('.', '-')
+                screenshot_path = screenshot_dir / f"{self.session_id}_{timestamp}.jpg"
+                
+                async with aiofiles.open(screenshot_path, 'wb') as f:
+                    await f.write(self.frame_buffer[-1]['data'])
+                
+                # Add screenshot path to arguments metadata
+                if 'metadata' not in arguments:
+                    arguments['metadata'] = {}
+                arguments['metadata']['screenshot'] = str(screenshot_path)
+                
+                logger.info("screenshot_captured", path=str(screenshot_path), session_id=self.session_id)
+        
+        # Send tool call to client
         await self._send_message(MessageType.TOOL_CALL, {
             "function": function_name,
             "arguments": arguments

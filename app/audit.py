@@ -102,7 +102,8 @@ class AuditLogger:
         severity: int,
         description: str,
         source: Literal["ai", "system", "user"] = "ai",
-        metadata: Optional[dict] = None
+        metadata: Optional[dict] = None,
+        screenshot_data: Optional[bytes] = None
     ) -> SafetyEvent:
         """
         Log a safety event to the audit trail.
@@ -127,7 +128,26 @@ class AuditLogger:
             source=source,
             metadata=metadata or {}
         )
-        
+
+        # Save screenshot if provided
+        if screenshot_data:
+            from pathlib import Path
+            import aiofiles
+            
+            screenshot_dir = Path("./evidence")
+            screenshot_dir.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = event.timestamp.replace(':', '-').replace('.', '-')
+            screenshot_path = screenshot_dir / f"{session_id}_{timestamp}.jpg"
+            
+            async with aiofiles.open(screenshot_path, 'wb') as f:
+                await f.write(screenshot_data)
+            
+            # Add screenshot path to metadata
+            if event.metadata is None:
+                event.metadata = {}
+            event.metadata['screenshot'] = str(screenshot_path)
+                
         # Store in memory
         if session_id not in self._session_events:
             self._session_events[session_id] = []

@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from datetime import datetime
+import traceback
 import structlog
 from google import genai  # Use new SDK
 from app.audit import AuditLogger, SafetyEvent

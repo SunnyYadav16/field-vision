@@ -55,6 +55,13 @@ Communication Style:
 - Prioritize safety warnings over other information
 - Reference specific manual sections when applicable
 
+Screenshot Capture Guidance:
+When you detect a critical safety violation (severity 4-5), set capture_screenshot to true in the log_safety_event tool call to preserve visual evidence. This is especially important for:
+- Missing PPE in hazardous zones
+- Unsafe body positioning near moving machinery
+- Lockout/Tagout violations
+- Any violation where visual proof would be valuable for incident investigation
+
 IMPORTANT: You are an ADVISORY system only. You do NOT control any machinery. All physical actions must be performed by the human technician."""
 
     # Tool definition for safety event logging
@@ -87,6 +94,10 @@ IMPORTANT: You are an ADVISORY system only. You do NOT control any machinery. Al
                         "description": types.Schema(
                             type=types.Type.STRING,
                             description="Detailed description of the observation"
+                        ),
+                        "capture_screenshot": types.Schema(
+                            type=types.Type.BOOLEAN,
+                            description="Set to true to capture visual evidence of the safety event"
                         )
                     },
                     required=["event_type", "severity", "description"]
