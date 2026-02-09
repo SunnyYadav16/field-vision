@@ -19,6 +19,10 @@ from .manual_loader import get_manual_loader, validate_manual_context
 
 logger = structlog.get_logger(__name__)
 
+# Store latest frame per active technician session (for manager camera view)
+# key: user_id, value: { "frame": bytes, "zone": str, "name": str, "role": str }
+active_camera_feeds = {}
+
 
 class MessageType(str, Enum):
     """WebSocket message types"""
@@ -224,6 +228,10 @@ class ClientConnection:
                 "resume_handle": self.session.resume_handle
             })
             
+            # Clean up camera feed for this user
+            if self.session_user:
+                active_camera_feeds.pop(self.session_user.get("user_id"), None)
+            
             self.session = None
             self.session_id = None
     
@@ -239,13 +247,22 @@ class ClientConnection:
         await self.session.send_audio(audio_bytes)
     
     async def _handle_video_frame(self, payload: dict) -> None:
-        """Forward video frame to Gemini"""
+        """Forward video frame to Gemini and store for manager view"""
         if not self.session:
             return
             
         # Decode base64 JPEG
         frame_b64 = payload.get("data", "")
         frame_bytes = base64.b64decode(frame_b64)
+        
+        # Store latest frame for manager camera relay
+        if self.session_user:
+            active_camera_feeds[self.session_user["user_id"]] = {
+                "frame": frame_bytes,
+                "zone": self.session_user.get("zone", "unknown"),
+                "name": self.session_user.get("name", "Unknown"),
+                "role": self.session_user.get("role", "technician")
+            }
         
         await self.session.send_video_frame(frame_bytes)
     

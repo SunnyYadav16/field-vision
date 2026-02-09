@@ -6,10 +6,11 @@ FastAPI Main Application
 import os
 from pathlib import Path
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 import structlog
-from fastapi import FastAPI, WebSocket, Depends, Request, HTTPException
+from fastapi import FastAPI, WebSocket, Depends, Request, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app.auth import (
     authenticate_user, create_token, get_current_user,
@@ -17,12 +18,13 @@ from app.auth import (
 )
 
 from app.config import get_settings
-from app.websocket_handler import get_connection_manager
+from app.websocket_handler import get_connection_manager, active_camera_feeds
 from app.audit import get_audit_logger
 from app.work_orders import (
     get_pending_orders, get_all_orders, approve_pending_order,
     get_approved_orders, get_completed_orders, complete_order
 )
+from app.report_generator import generate_work_orders_report
 
 # Configure structured logging
 structlog.configure(
@@ -174,6 +176,74 @@ async def get_audit_logs():
     audit_logger = get_audit_logger()
     sessions = audit_logger.get_all_sessions()
     return {"sessions": sessions, "total_sessions": len(sessions)}
+
+
+# ── Camera Feeds for Manager Dashboard ──
+@app.get("/api/camera-feeds")
+async def list_camera_feeds(user: dict = Depends(get_current_user)):
+    """List all active technician camera feeds - managers/supervisors only"""
+    if not has_permission(user, "approve_work_order"):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    feeds = []
+    for user_id, feed_data in active_camera_feeds.items():
+        feeds.append({
+            "user_id": user_id,
+            "name": feed_data.get("name", "Unknown"),
+            "zone": feed_data.get("zone", "unknown"),
+            "role": feed_data.get("role", "technician"),
+            "has_frame": feed_data.get("frame") is not None
+        })
+    return {"feeds": feeds, "count": len(feeds)}
+
+
+@app.get("/api/camera-feeds/{user_id}/frame")
+async def get_camera_frame(user_id: str, user: dict = Depends(get_current_user)):
+    """Get latest camera frame for a specific technician"""
+    if not has_permission(user, "approve_work_order"):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    if user_id not in active_camera_feeds:
+        raise HTTPException(status_code=404, detail="Feed not found")
+    
+    frame_bytes = active_camera_feeds[user_id].get("frame")
+    if not frame_bytes:
+        raise HTTPException(status_code=404, detail="No frame available")
+    
+    return StreamingResponse(
+        iter([frame_bytes]),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+    )
+
+
+@app.get("/api/reports/work-orders")
+async def get_work_orders_report(
+    start: str = Query(..., description="Start date ISO format"),
+    end: str = Query(..., description="End date ISO format"),
+    user: dict = Depends(get_current_user)
+):
+    """Generate PDF report of work orders in date range"""
+    if not has_permission(user, "approve_work_order"):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to generate reports"
+        )
+    
+    try:
+        start_date = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
+        end_date = datetime.fromisoformat(end.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format")
+    
+    pdf_bytes = generate_work_orders_report(start_date, end_date)
+    
+    filename = f"work_orders_report_{start[:10]}_to_{end[:10]}.pdf"
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 
 @app.get("/api/reports/{session_id}")
