@@ -1,0 +1,17 @@
+[
+  {
+    "order_id": "WO-20260208184601",
+    "status": "approved",
+    "priority": "medium",
+    "equipment": "pump number three",
+    "description": "Maintenance request for pump number three",
+    "requested_by": {
+      "id": "tech_042",
+      "name": "Alex Rivera",
+      "role": "technician"
+    },
+    "badge_verified": true,
+    "created_at": "2026-02-08T23:46:01.648468Z",
+    "escalated_to": "sup_007"
+  }
+]

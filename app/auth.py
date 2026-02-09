@@ -73,11 +73,17 @@ async def get_current_user(request: Request) -> dict:
 async def get_ws_user(websocket: WebSocket) -> dict:
     """Extract user from WebSocket query parameter ?token=xxx"""
     token = websocket.query_params.get("token")
+    print(f"[WS_AUTH] Token received: {token[:20] if token else 'NONE'}...")  # Debug
     if not token:
+        # Must accept before closing with custom code
+        await websocket.accept()
         await websocket.close(code=4001, reason="Missing auth token")
         return None
     try:
         return verify_token(token)
-    except HTTPException:
+    except HTTPException as e:
+        print(f"[WS_AUTH] Token verification failed: {e.detail}")  # Debug
+        await websocket.accept()
         await websocket.close(code=4001, reason="Invalid token")
         return None
+

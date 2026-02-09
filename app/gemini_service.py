@@ -14,6 +14,11 @@ from google.genai import types
 
 from .config import get_settings
 from .audit import get_audit_logger
+from .work_orders import (
+    create_work_order, escalate_work_order,
+    get_pending_orders, approve_pending_order
+)
+from .auth import has_permission, load_users
 
 logger = structlog.get_logger(__name__)
 
@@ -55,7 +60,21 @@ Communication Style:
 - Prioritize safety warnings over other information
 - Reference specific manual sections when applicable
 
-IMPORTANT: You are an ADVISORY system only. You do NOT control any machinery. All physical actions must be performed by the human technician."""
+IMPORTANT: You are an ADVISORY system only. You do NOT control any machinery. All physical actions must be performed by the human technician.
+
+WORK ORDER PROTOCOL:
+When a technician requests a work order (e.g., 'create a ticket for...', 'log a work order for...', 'report an issue with...'):
+1. First, call the create_work_order tool with the equipment, priority, and description from their request.
+2. After the tool response, ask the technician to hold their employee ID badge up to the camera for verification.
+3. When you can see a badge in the video frame, read the employee name, ID number, and department from it.
+4. Call the verify_badge tool with the extracted information.
+5. Based on the verify_badge response:
+   - If AUTHORIZED: Confirm the work order was created and provide the order ID.
+   - If ESCALATED: Inform the technician their request has been sent to their supervisor for approval.
+   - If BADGE NOT FOUND: Ask them to try again, holding the badge closer and steadier.
+
+BADGE READING:
+When looking for a badge in the video, search for a card or ID tag being held up. Look for printed text showing a name, ID number (usually alphanumeric like 'tech_042' or 'EMP-123'), and optionally a department or role. If you cannot read the badge clearly, ask the technician to hold it closer or adjust the angle."""
 
     # Tool definition for safety event logging
     SAFETY_EVENT_TOOL = types.Tool(
@@ -90,6 +109,75 @@ IMPORTANT: You are an ADVISORY system only. You do NOT control any machinery. Al
                         )
                     },
                     required=["event_type", "severity", "description"]
+                )
+            )
+        ]
+    )
+
+    # Tool definition for creating work orders via voice
+    WORK_ORDER_TOOL = types.Tool(
+        function_declarations=[
+            types.FunctionDeclaration(
+                name="create_work_order",
+                description=(
+                    "Creates a maintenance work order when the technician "
+                    "requests one via voice. IMPORTANT: After this tool is "
+                    "called, you MUST ask the technician to show their ID "
+                    "badge to the camera before the order can be processed. "
+                    "Do NOT confirm the order until badge verification is "
+                    "complete via the verify_badge tool."
+                ),
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "equipment_id": types.Schema(
+                            type=types.Type.STRING,
+                            description="The equipment name or ID"
+                        ),
+                        "priority": types.Schema(
+                            type=types.Type.STRING,
+                            description="Priority level",
+                            enum=["low", "medium", "high", "critical"]
+                        ),
+                        "description": types.Schema(
+                            type=types.Type.STRING,
+                            description="Description of the issue"
+                        )
+                    },
+                    required=["equipment_id", "priority", "description"]
+                )
+            )
+        ]
+    )
+
+    # Tool definition for badge verification
+    BADGE_VERIFY_TOOL = types.Tool(
+        function_declarations=[
+            types.FunctionDeclaration(
+                name="verify_badge",
+                description=(
+                    "Verifies an employee ID badge seen in the video feed. "
+                    "Call this when you can see a badge being held up to the "
+                    "camera. Extract the employee name, ID number, and "
+                    "department visible on the badge."
+                ),
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "employee_name": types.Schema(
+                            type=types.Type.STRING,
+                            description="Name visible on the badge"
+                        ),
+                        "employee_id": types.Schema(
+                            type=types.Type.STRING,
+                            description="Employee ID number on the badge"
+                        ),
+                        "department": types.Schema(
+                            type=types.Type.STRING,
+                            description="Department shown on the badge"
+                        )
+                    },
+                    required=["employee_name", "employee_id"]
                 )
             )
         ]
@@ -133,7 +221,7 @@ IMPORTANT: You are an ADVISORY system only. You do NOT control any machinery. Al
             system_instruction=types.Content(
                 parts=[types.Part(text=full_instruction)]
             ),
-            tools=[self.SAFETY_EVENT_TOOL],
+            tools=[self.SAFETY_EVENT_TOOL, self.WORK_ORDER_TOOL, self.BADGE_VERIFY_TOOL],
             
             # Configure voice and generation settings
             generation_config=types.GenerationConfig(
@@ -201,6 +289,114 @@ IMPORTANT: You are an ADVISORY system only. You do NOT control any machinery. Al
                 "message": f"Safety event '{arguments.get('event_type')}' logged successfully"
             }
         
+        elif function_name == "create_work_order":
+            # Step 1: Technician requested a work order.
+            # DON'T create it yet. Store the request and tell Gemini
+            # to ask for badge verification.
+            # Note: pending_work_order is stored on the LiveSession instance
+            session = self._active_sessions.get(session_id)
+            if session:
+                session.pending_work_order = {
+                    "equipment_id": arguments.get("equipment_id", ""),
+                    "priority": arguments.get("priority", "medium"),
+                    "description": arguments.get("description", ""),
+                }
+            
+            return {
+                "status": "badge_verification_required",
+                "message": (
+                    "Work order request received. Badge verification "
+                    "is required before processing. Please ask the "
+                    "technician to hold their employee ID badge up "
+                    "to the camera."
+                )
+            }
+        
+        elif function_name == "verify_badge":
+            # Step 2: Gemini read the badge from video.
+            # Look up the employee and check permissions.
+            badge_employee_id = arguments.get("employee_id", "")
+            badge_name = arguments.get("employee_name", "")
+            badge_dept = arguments.get("department", "")
+            
+            # Get pending work order from session
+            session = self._active_sessions.get(session_id)
+            pending = getattr(session, 'pending_work_order', {}) if session else {}
+            
+            # Look up this employee in users.json
+            users = load_users()
+            badge_user = users.get(badge_employee_id)
+            
+            if badge_user is None:
+                # Employee ID not found in our system
+                return {
+                    "status": "badge_not_found",
+                    "message": (
+                        f"Employee ID '{badge_employee_id}' was not "
+                        f"found in the system. Please try scanning "
+                        f"the badge again or verify the ID."
+                    )
+                }
+            
+            elif "create_work_order" in badge_user.get("permissions", []):
+                # AUTHORIZED: Create the work order
+                order = create_work_order(
+                    equipment_id=pending.get("equipment_id", "unknown"),
+                    priority=pending.get("priority", "medium"),
+                    description=pending.get("description", ""),
+                    requested_by={
+                        "id": badge_employee_id,
+                        "name": badge_name,
+                        "role": badge_user["role"]
+                    }
+                )
+                # Clear pending work order
+                if session:
+                    session.pending_work_order = {}
+                    
+                return {
+                    "status": "authorized",
+                    "order_id": order["order_id"],
+                    "message": (
+                        f"Work order {order['order_id']} created "
+                        f"successfully. {order['priority'].upper()} "
+                        f"priority ticket for {order['equipment']} "
+                        f"- {order['description']}. Assigned to "
+                        f"maintenance queue."
+                    )
+                }
+            
+            else:
+                # NOT AUTHORIZED: Escalate to supervisor
+                order = escalate_work_order(
+                    equipment_id=pending.get("equipment_id", "unknown"),
+                    priority=pending.get("priority", "medium"),
+                    description=pending.get("description", ""),
+                    requested_by={
+                        "id": badge_employee_id,
+                        "name": badge_name,
+                        "role": badge_user["role"]
+                    },
+                    escalate_to="sup_007"
+                )
+                # Clear pending work order
+                if session:
+                    session.pending_work_order = {}
+                    
+                return {
+                    "status": "escalated",
+                    "order_id": order["order_id"],
+                    "message": (
+                        f"Employee {badge_name} ({badge_employee_id}) "
+                        f"does not have work order creation "
+                        f"permission. Request {order['order_id']} has "
+                        f"been escalated to supervisor Morgan Chen "
+                        f"(sup_007) for approval. The technician "
+                        f"should be informed their request was "
+                        f"submitted for supervisor review."
+                    )
+                }
+        
         logger.warning("unknown_tool_call", function_name=function_name)
         return {"status": "error", "message": f"Unknown function: {function_name}"}
 
@@ -230,6 +426,7 @@ class LiveSession:
         self._session_context = None
         self._running = False
         self._resume_handle: Optional[str] = None
+        self.pending_work_order: dict = {}  # State for chained tool calls
         self._receive_task: Optional[asyncio.Task] = None
         
     @property
