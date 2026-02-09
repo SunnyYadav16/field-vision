@@ -132,7 +132,7 @@ class FieldVisionApp {
     connectWebSocket() {
         this.shouldReconnect = true;
         return new Promise((resolve, reject) => {
-            this.ws = new WebSocket(this.config.wsUrl);
+            this.ws = new WebSocket(`ws://${window.location.host}/ws?token=${localStorage.getItem('fv_token') || ''}`);
 
             this.ws.onopen = () => {
                 console.log('WebSocket connected');

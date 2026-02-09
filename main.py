@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 import structlog
-from fastapi import FastAPI, WebSocket, Depends, Request
+from fastapi import FastAPI, WebSocket, Depends, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -19,6 +19,10 @@ from app.auth import (
 from app.config import get_settings
 from app.websocket_handler import get_connection_manager
 from app.audit import get_audit_logger
+from app.work_orders import (
+    get_pending_orders, get_all_orders, approve_pending_order,
+    get_approved_orders, get_completed_orders, complete_order
+)
 
 # Configure structured logging
 structlog.configure(
@@ -182,6 +186,63 @@ async def get_session_report(session_id: str):
     reporter = AuditReporter(audit_logger)
     html = await reporter.generate_session_report(session_id)
     return HTMLResponse(content=html, status_code=200)
+
+
+# ── Work Orders API ──
+@app.get("/api/work-orders")
+async def list_work_orders(user: dict = Depends(get_current_user)):
+    """List work orders - supervisors see all, technicians see their own"""
+    if has_permission(user, "approve_work_order"):
+        return {
+            "pending": get_pending_orders(),
+            "approved": get_approved_orders(),
+            "completed": get_completed_orders()
+        }
+    # Technicians see only their own
+    all_orders = get_all_orders() + get_pending_orders()
+    my_orders = [
+        o for o in all_orders
+        if o["requested_by"]["id"] == user["user_id"]
+    ]
+    return {"my_orders": my_orders}
+
+
+@app.post("/api/work-orders/{order_id}/approve")
+async def approve_order(
+    order_id: str,
+    user: dict = Depends(get_current_user)
+):
+    """Approve a pending work order - supervisors/managers only"""
+    if not has_permission(user, "approve_work_order"):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to approve work orders"
+        )
+    order = approve_pending_order(order_id)
+    if order:
+        return {"status": "approved", "order": order}
+    raise HTTPException(
+        status_code=404, detail="Order not found"
+    )
+
+
+@app.post("/api/work-orders/{order_id}/complete")
+async def mark_order_complete(
+    order_id: str,
+    user: dict = Depends(get_current_user)
+):
+    """Mark an approved work order as completed - supervisors/managers only"""
+    if not has_permission(user, "approve_work_order"):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to complete work orders"
+        )
+    order = complete_order(order_id)
+    if order:
+        return {"status": "completed", "order": order}
+    raise HTTPException(
+        status_code=404, detail="Order not found or not in approved state"
+    )
 
 
 @app.websocket("/ws")
