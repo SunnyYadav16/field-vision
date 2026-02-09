@@ -405,34 +405,29 @@ class FieldVisionApp {
     async setupAudioProcessing() {
         this.audioContext = new AudioContext({ sampleRate: this.config.audioSampleRate });
 
-        // Create audio worklet for capturing audio
+        try {
+            await this.audioContext.audioWorklet.addModule('/static/pcm-processor.js');
+        } catch (e) {
+            console.error('Failed to load audio worklet:', e);
+            throw e;
+        }
+
         const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+        const processor = new AudioWorkletNode(this.audioContext, 'pcm-processor');
 
-        // Use ScriptProcessor for broader compatibility (worklet is preferred but more complex)
-        const processor = this.audioContext.createScriptProcessor(4096, 1, 1);
-
-        processor.onaudioprocess = (e) => {
+        processor.port.onmessage = (event) => {
             if (this.state.sessionActive && !this.state.muted) {
-                const inputData = e.inputBuffer.getChannelData(0);
-                const pcmData = this.float32ToPCM16(inputData);
-                const base64 = this.arrayBufferToBase64(pcmData.buffer);
+                // pcmData is already Int16Array buffer from worklet
+                const base64 = this.arrayBufferToBase64(event.data.pcmData);
                 this.sendMessage('audio_data', { data: base64 });
             }
         };
 
         source.connect(processor);
-        processor.connect(this.audioContext.destination);
+        // source.connect(this.audioContext.destination); // Monitor audio locally? No, echo loop.
+        processor.connect(this.audioContext.destination); // Keep graph alive
 
         this.audioWorklet = processor;
-    }
-
-    float32ToPCM16(float32Array) {
-        const int16Array = new Int16Array(float32Array.length);
-        for (let i = 0; i < float32Array.length; i++) {
-            const s = Math.max(-1, Math.min(1, float32Array[i]));
-            int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-        }
-        return int16Array;
     }
 
     stopMedia() {
@@ -446,6 +441,12 @@ class FieldVisionApp {
             this.audioContext = null;
         }
 
+        if (this.audioWorklet) {
+            this.audioWorklet.disconnect();
+            this.audioWorklet = null;
+        }
+
+        // Clean up UI
         this.elements.videoPreview.srcObject = null;
         this.elements.videoPlaceholder.classList.remove('hidden');
     }
