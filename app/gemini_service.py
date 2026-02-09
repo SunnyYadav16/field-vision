@@ -194,7 +194,8 @@ When looking for a badge in the video, search for a card or ID tag being held up
         session_config: SessionConfig,
         on_audio: Callable[[bytes], Any],
         on_text: Callable[[str], Any],
-        on_tool_call: Callable[[str, dict], Any]
+        on_tool_call: Callable[[str, dict], Any],
+        on_turn_complete: Optional[Callable[[], Any]] = None
     ) -> "LiveSession":
         """
         Create a new Gemini Live session.
@@ -251,7 +252,8 @@ When looking for a badge in the video, search for a card or ID tag being held up
             config=config,
             on_audio=on_audio,
             on_text=on_text,
-            on_tool_call=on_tool_call
+            on_tool_call=on_tool_call,
+            on_turn_complete=on_turn_complete
         )
         
         self._active_sessions[session_config.session_id] = session
@@ -414,7 +416,8 @@ class LiveSession:
         config: types.LiveConnectConfig,
         on_audio: Callable[[bytes], Any],
         on_text: Callable[[str], Any],
-        on_tool_call: Callable[[str, dict], Any]
+        on_tool_call: Callable[[str, dict], Any],
+        on_turn_complete: Optional[Callable[[], Any]] = None
     ):
         self.service = service
         self.session_id = session_id
@@ -422,12 +425,22 @@ class LiveSession:
         self.on_audio = on_audio
         self.on_text = on_text
         self.on_tool_call = on_tool_call
+        self.on_turn_complete = on_turn_complete
         self._session = None
         self._session_context = None
         self._running = False
         self._resume_handle: Optional[str] = None
         self.pending_work_order: dict = {}  # State for chained tool calls
         self._receive_task: Optional[asyncio.Task] = None
+        
+        # Explicit History Tracking
+        self.history: list[types.Content] = []
+        self._current_ai_response_parts: list[types.Part] = []
+        
+        # Turn Completion Tracking (5s Fallback Timer)
+        self._turn_in_progress = False
+        self._turn_complete_timer: Optional[asyncio.Task] = None
+        self._turn_complete_timeout: float = 5.0  # seconds of silence to trigger turn_complete
         
     @property
     def resume_handle(self) -> Optional[str]:
@@ -457,6 +470,11 @@ class LiveSession:
         """Close the Gemini session"""
         self._running = False
         
+        # Cancel timers
+        if self._turn_complete_timer:
+            self._turn_complete_timer.cancel()
+            self._turn_complete_timer = None
+            
         if self._receive_task:
             self._receive_task.cancel()
             try:
@@ -538,7 +556,7 @@ class LiveSession:
             logger.error("send_video_error", error=str(e), session_id=self.session_id)
     
     async def send_text(self, text: str) -> None:
-        """Send a text message to Gemini with validation"""
+        """Send a text message to Gemini with active history injection"""
         if not self._session or not self._running:
             return
         
@@ -552,18 +570,22 @@ class LiveSession:
             logger.warning("text_too_long", length=len(text), max_length=max_text_length)
             text = text[:max_text_length]
         
+        # Add user message to local history
+        user_content = types.Content(
+            role="user",
+            parts=[types.Part(text=text.strip())]
+        )
+        self.history.append(user_content)
+        
         try:
+            # Send the entire conversation history for context persistence
             await self._session.send(
                 input=types.LiveClientContent(
-                    turns=[
-                        types.Content(
-                            role="user",
-                            parts=[types.Part(text=text.strip())]
-                        )
-                    ],
+                    turns=self.history,
                     turn_complete=True
                 )
             )
+            logger.debug("sent_text_with_history", turns=len(self.history), session_id=self.session_id)
         except Exception as e:
             logger.error("send_text_error", error=str(e), session_id=self.session_id)
     
@@ -586,7 +608,7 @@ class LiveSession:
             logger.error("receive_loop_fatal_error", error=str(e), session_id=self.session_id)
     
     async def _handle_response(self, response) -> None:
-        """Process a response from Gemini"""
+        """Process a response from Gemini with history accumulation"""
         # Handle session resumption updates
         if hasattr(response, 'session_resumption_update'):
             update = response.session_resumption_update
@@ -599,21 +621,37 @@ class LiveSession:
             content = response.server_content
             
             if hasattr(content, 'model_turn') and content.model_turn:
+                self._turn_in_progress = True
+                self._reset_turn_complete_timer()
+                
                 for part in content.model_turn.parts:
                     # Handle audio
                     if hasattr(part, 'inline_data') and part.inline_data:
                         if part.inline_data.mime_type.startswith("audio/"):
                             await self.on_audio(part.inline_data.data)
+                            # Accumulate response for history if needed (audio is usually ephemeral)
+                            self._reset_turn_complete_timer()
                     
                     # Handle text
                     if hasattr(part, 'text') and part.text:
                         await self.on_text(part.text)
+                        # Add to AI turn accumulator
+                        self._current_ai_response_parts.append(types.Part(text=part.text))
+                        # Reset timer
+                        self._reset_turn_complete_timer()
+            
+            # Check for native turn_complete signal
+            if hasattr(content, 'turn_complete') and content.turn_complete:
+                await self._finalize_turn("native")
         
         # Handle tool calls
         if hasattr(response, 'tool_call') and response.tool_call:
             for fc in response.tool_call.function_calls:
                 # Notify callback
                 await self.on_tool_call(fc.name, dict(fc.args))
+                
+                # Check for reset of timer if it was a lengthy tool call
+                self._reset_turn_complete_timer()
                 
                 # Process tool call and send response
                 result = await self.service.handle_tool_call(
@@ -638,6 +676,48 @@ class LiveSession:
                     logger.debug("tool_response_sent", function=fc.name, session_id=self.session_id)
                 except Exception as e:
                     logger.error("tool_response_send_failed", function=fc.name, error=str(e), session_id=self.session_id)
+
+    def _reset_turn_complete_timer(self) -> None:
+        """Reset the turn completion timer"""
+        if self._turn_complete_timer:
+            self._turn_complete_timer.cancel()
+        
+        logger.debug("timer_reset", session_id=self.session_id)
+        self._turn_complete_timer = asyncio.create_task(self._turn_complete_timer_task())
+    
+    async def _turn_complete_timer_task(self) -> None:
+        """Fires turn_complete if no new activity for 5 seconds"""
+        try:
+            await asyncio.sleep(self._turn_complete_timeout)
+            if self._turn_in_progress:
+                await self._finalize_turn("fallback_timer")
+        except asyncio.CancelledError:
+            pass
+
+    async def _finalize_turn(self, reason: str) -> None:
+        """Finalize the current turn: cancel timer, save history, and notify callback"""
+        if self._turn_complete_timer:
+            self._turn_complete_timer.cancel()
+            self._turn_complete_timer = None
+        
+        if not self._turn_in_progress:
+            return
+            
+        self._turn_in_progress = False
+        logger.debug("turn_finalized", reason=reason, session_id=self.session_id)
+        
+        # Combine accumulated AI parts into history turn
+        if self._current_ai_response_parts:
+            self.history.append(types.Content(
+                role="model",
+                parts=self._current_ai_response_parts
+            )
+            )
+            self._current_ai_response_parts = []
+            
+        # Fire callback to notify user/client they can ask the next question
+        if self.on_turn_complete:
+            await self.on_turn_complete()
 
 
 # Service singleton

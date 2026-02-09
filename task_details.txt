@@ -1,0 +1,317 @@
+FieldVision
+Enhancement Tasks
+Technical Integration Analysis
+Complete understanding of how 8 new tasks integrate into the existing architecture
+Hackathon Sprint | February 8-9, 2026
+Task Overview
+The following table summarizes all 8 enhancement tasks, their integration complexity, and the primary components they touch in the existing FieldVision architecture.
+Task 1: Persistent Voice Sessions (Multi-Question Without Session Drops)
+The Problem
+Currently, the Gemini Live API session may terminate or become unresponsive after one or a few voice interactions, preventing the technician from asking follow-up questions naturally. This breaks the core promise of a "continuous co-pilot" experience.
+Root Cause Analysis
+There are three likely causes for premature session termination in the current implementation:
+Turn completion misinterpretation: The Live API uses Voice Activity Detection (VAD) to determine when the user has stopped speaking. If the VAD sensitivity is too aggressive, silence between questions is interpreted as "session end" rather than a natural pause. The model sends a turn_complete signal, and the client may be closing the connection in response.
+Client-side WebSocket closure: The frontend JavaScript may be calling websocket.close() after receiving the first complete response, treating the interaction as a single request-response cycle rather than a persistent session.
+Server-side inactivity timeout: The Gemini Live API has built-in idle timeouts. If no audio/video data is sent for a period (typically 5-15 seconds of silence), the server may close the connection.
+How It Integrates Into FieldVision
+Architecture Changes
+The fix requires changes at three layers, but does not alter the fundamental architecture:
+FastAPI Backend (server.py): Modify the WebSocket proxy to keep the Gemini session alive after each turn_complete. Instead of closing the connection, the backend should continue listening for new audio input. Implement a heartbeat mechanism that sends periodic keep-alive pings to the Gemini WebSocket if no user audio is detected for more than a few seconds.
+Frontend (media-handler.js): Ensure the microphone stream is never stopped between interactions. The getUserMedia() audio stream should remain open for the entire session lifecycle. Only the "End Session" button should trigger cleanup.
+VAD Configuration: In the BidiGenerateContentSetup payload, tune the VAD parameters to be less aggressive. Increase the silence threshold before a turn is considered complete. This can be done in the realtimeInputConfig section of the setup message.
+Implementation Approach
+In the BidiGenerateContentSetup, configure the VAD and session behavior:
+realtimeInputConfig: {
+speechConfig: {
+voiceActivityDetection: {
+silenceDurationMs: 2000,   // Wait 2 seconds of silence before ending turn
+prefixPaddingMs: 500       // Buffer before speech starts
+}
+}
+}
+On the backend, the WebSocket handler loop should never exit on turn_complete. Instead, maintain a state machine:
+Session States: LISTENING -> PROCESSING -> RESPONDING -> LISTENING (loop)
+Only exit on: explicit user "End Session" OR server disconnect OR idle timeout (configurable)
+Additionally, implement SessionResumptionConfig in the setup payload. If the connection does drop (network issue), store the resumption handle and automatically reconnect without the technician noticing:
+sessionResumption: { handle: stored_handle_from_last_SessionResumptionUpdate }
+Impact on Existing Features
+This change is foundational and improves every other feature. The Sentinel agent can now continuously monitor while the technician asks the Librarian multiple questions in sequence. The Auditor gets a richer, multi-turn transcript to log. No existing functionality breaks; this is purely additive behavior.
+Task 2: Include Q&A Transcript in Reports
+The Problem
+The current audit_log.json only captures tool call events (safety events logged via log_safety_event). It does not capture the actual conversational exchanges between the technician and the AI, meaning the report misses context like what questions were asked, what guidance was provided, and what the AI observed but did not flag as a formal event.
+How It Integrates Into FieldVision
+Architecture Changes
+This requires modifications only to the backend (FastAPI server) and optionally the report generation layer. No frontend changes are needed.
+Conversation Logger (new module): Create a parallel logging stream alongside the existing audit_log.json. Every message flowing through the FastAPI proxy already passes through the server. Intercept and log: (a) user audio transcriptions from the Live API's server-side transcript events, and (b) AI text/audio responses. The Gemini Live API sends serverContent messages that include text alongside audio. Capture the text portion of every response.
+Unified Session Log: Merge the conversation transcript with the tool call events into a single chronological session_transcript.json. Each entry should include a timestamp, the speaker (USER or AI), the content type (question, answer, observation, tool_call, tool_response), and the actual text.
+Data Structure
+{
+"session_id": "FV-2026-0208-001",
+"technician_id": "tech_042",
+"events": [
+{
+"timestamp": "2026-02-08T14:32:15Z",
+"speaker": "USER",
+"type": "question",
+"content": "What is the lubrication interval for the spindle bearings?"
+},
+{
+"timestamp": "2026-02-08T14:32:18Z",
+"speaker": "AI",
+"type": "answer",
+"content": "According to the Fervi maintenance manual page 12, the spindle bearings..."
+},
+{
+"timestamp": "2026-02-08T14:35:42Z",
+"speaker": "SYSTEM",
+"type": "tool_call",
+"content": "log_safety_event",
+"parameters": { "type": "missing_ppe", "severity": 8, "description": "..." }
+}
+]
+}
+How Transcription Works
+The Gemini Live API provides server-side transcription in two ways. First, when the model generates audio responses, it often includes a parallel text transcript in the serverContent message. Second, for user speech, the API may provide input transcription depending on configuration. If input transcription is not available natively, you can extract it by adding a system instruction that tells the model to always begin its response by briefly restating what the user asked. This gives you an implicit transcript of user queries within the AI response text.
+Alternatively, you can run a lightweight speech-to-text on the user audio chunks server-side (using the Google Speech-to-Text API or even a local Whisper model) before forwarding them to Gemini. This adds minimal latency since it runs in parallel with the Gemini processing.
+Impact on Existing Features
+This directly enhances the Auditor agent. The audit_log.json remains unchanged for backward compatibility, but the new session_transcript.json becomes the primary input for report generation. The consolidated PDF reports (Task 7) will use this richer data source. This is entirely additive with no risk to existing functionality.
+Task 3: Contextual Visual Monitoring with Screenshot Capture
+The Problem
+The current Sentinel agent detects hazards and logs them as text events, but it does not capture visual evidence. A report saying "missing PPE detected at 14:32" is far less compelling than the same report with an attached screenshot showing the technician's bare hand near machinery. Additionally, the monitoring needs to go beyond generic hazard detection to zone-specific compliance (e.g., "Hard Hat Zone" awareness).
+How It Integrates Into FieldVision
+Architecture Changes
+This task touches the backend frame buffer, the tool calling schema, the AI system prompt, and the report generation pipeline.
+Frame Buffer (Backend): The FastAPI backend already receives JPEG frames at 1 FPS from the frontend. Currently these are forwarded to Gemini and discarded. The enhancement adds a circular buffer that retains the last N frames (e.g., last 30 frames = 30 seconds) in memory. When a safety event is triggered, the backend saves the frame closest to the event timestamp to disk.
+Enhanced Tool Schema: Modify the log_safety_event function to include a capture_screenshot boolean parameter. When Gemini detects a critical violation, it sets this to true. The backend, upon receiving a tool call with capture_screenshot: true, pulls the most recent frame from the buffer and saves it as evidence.
+Zone-Aware System Prompt: Update the system instruction to include zone compliance rules. For example: "If you observe signage indicating a Hard Hat Zone, Confined Space, or High Voltage Area, continuously verify that the technician is wearing the required PPE for that zone. If a person enters a marked zone without the required equipment, immediately trigger log_safety_event with capture_screenshot: true and severity 9-10."
+Implementation Flow
+The sequence when a violation is detected works as follows:
+Gemini observes via the video stream that a person has entered an area with a visible "HARD HAT REQUIRED" sign, but is not wearing a hard hat.
+Gemini triggers log_safety_event with parameters: type: "zone_violation", severity: 9, description: "Worker entered Hard Hat Zone without helmet. Sign visible at top-right of frame.", capture_screenshot: true.
+The FastAPI backend receives this tool call, saves the current frame buffer image to /evidence/incident_{timestamp}.jpg, and appends both the event metadata and the image filepath to the session log.
+The backend returns a tool response confirming the capture: "Screenshot saved. Event logged with visual evidence."
+Gemini then verbally warns the technician: "Warning: You have entered a Hard Hat Zone. Please put on your hard hat before proceeding."
+Enhanced Tool Declaration
+{
+"name": "log_safety_event",
+"parameters": {
+"type": "object",
+"properties": {
+"event_type": { "type": "string" },
+"severity": { "type": "number", "minimum": 1, "maximum": 10 },
+"description": { "type": "string" },
+"zone": { "type": "string", "description": "The safety zone if applicable" },
+"capture_screenshot": { "type": "boolean", "default": false }
+}
+}
+}
+Report Integration
+The captured screenshots become embedded evidence in the compliance reports. In the session transcript (Task 2), each tool call event with a screenshot gets an additional image_path field. When the consolidated PDF (Task 7) is generated, these images are embedded inline next to the corresponding event description, creating a visual audit trail that is far more compelling for safety managers and hackathon judges alike.
+Impact on Existing Features
+The Sentinel agent becomes significantly more powerful. The Auditor agent now has visual evidence to reference. The existing log_safety_event tool call flow is extended, not replaced, so backward compatibility is maintained. The frame buffer adds minimal memory overhead (30 JPEG frames at roughly 50KB each is about 1.5MB).
+Task 4: Human-Like Audio Output
+The Problem
+The AI's voice responses currently sound robotic or overly synthetic, which undermines trust in a safety-critical industrial environment. Technicians are more likely to follow guidance from a voice that sounds natural, authoritative, and clear, especially in high-noise factory settings.
+How It Integrates Into FieldVision
+Architecture Changes
+This task primarily involves configuration changes to the Gemini Live API setup and refinements to the system prompt. No structural architecture changes are needed.
+Voice Selection in Setup: The Gemini Live API's BidiGenerateContentSetup supports a speechConfig parameter where you select the voice. Choose a voice that sounds authoritative and clear. The native audio model (gemini-live-2.5-flash-native-audio) already produces more natural speech than traditional TTS pipelines because the model generates audio tokens directly rather than converting text to speech.
+System Prompt Engineering: The system instruction plays a huge role in how the AI "speaks." Add explicit behavioral directives to the system prompt that shape the conversational style.
+System Prompt Additions
+Add the following directives to the system_instruction in BidiGenerateContentSetup:
+"You are an experienced senior field engineer speaking to a colleague.
+Speak naturally, as a human expert would on a factory floor.
+Use concise, direct sentences. Avoid filler words.
+Never say 'As an AI' or reference being an artificial system.
+When giving safety warnings, speak with calm urgency - firm but not panicked.
+When giving maintenance steps, speak methodically and pause between steps.
+Use trade terminology naturally (e.g., 'torque the bolt to 45 foot-pounds'
+rather than 'apply 45 foot-pounds of rotational force').
+If the technician asks a follow-up, acknowledge briefly before answering
+(e.g., 'Good question' or 'Right, so...' rather than starting with a data dump).
+Match the technician's energy level - if they sound rushed, be more concise;
+if they're taking their time, provide more detail."
+Audio Output Configuration
+In the Live API setup, configure the audio output parameters for optimal clarity:
+generationConfig: {
+speechConfig: {
+voiceConfig: {
+prebuiltVoiceConfig: {
+voiceName: "Charon"  // or another clear, authoritative voice
+}
+}
+},
+responseModalities: ["AUDIO"]
+}
+The native audio model handles prosody (intonation, rhythm, stress) much better than text-to-speech because it generates the audio waveform directly from the language model's understanding of context. This means that when the model says "STOP - do not touch that panel" in a safety context, it will naturally emphasize the urgency, whereas a TTS system would read it flatly.
+Audio Post-Processing (Frontend)
+On the frontend, apply a simple equalizer to the received 24kHz PCM audio before playback. Boost mid-range frequencies (1-4kHz) which carry speech clarity, and attenuate low frequencies that compete with factory noise. This can be done with the Web Audio API's BiquadFilterNode in the browser, adding 3-5 lines of code to the audio playback pipeline.
+Impact on Existing Features
+This is entirely a quality-of-life improvement. No data flows change. The voice output becomes more natural, which improves every interaction: hazard warnings are more compelling, maintenance guidance is easier to follow, and the demo is more impressive. The only risk is that voice selection may need experimentation to find the right tone for industrial contexts.
+Task 5: Video Feed Cleaning and Transformation
+The Problem
+Raw camera feeds from industrial environments are noisy: poor lighting, lens smudges, glare from metal surfaces, vibration blur, and inconsistent exposure. Feeding degraded frames to Gemini reduces its ability to accurately identify PPE, read labels, detect anomalies, and perform zone-specific compliance checks. Cleaning the video before it reaches the AI significantly improves detection accuracy.
+How It Integrates Into FieldVision
+Architecture Changes
+A new pre-processing pipeline is inserted between the frame capture (frontend) and the Gemini proxy (backend). This can be implemented either client-side (in the browser using Canvas API) or server-side (in the FastAPI backend using OpenCV/Pillow).
+Server-Side Approach (Recommended)
+The server-side approach is recommended because it keeps the client thin and gives you access to more powerful image processing libraries. When the FastAPI backend receives a JPEG frame from the frontend, it passes through a processing pipeline before being forwarded to Gemini:
+Brightness/Contrast Normalization: Apply histogram equalization (OpenCV's CLAHE algorithm) to handle variable lighting conditions on factory floors. This ensures that dimly lit areas and brightly lit areas in the same frame are both visible to the AI.
+Noise Reduction: Apply a light Gaussian blur or bilateral filter to reduce sensor noise without losing edge detail. This is particularly important for low-quality webcams or phone cameras used in the hackathon demo.
+Sharpening: After noise reduction, apply an unsharp mask to restore edge clarity. This helps Gemini read small text on labels, QR codes, and safety signs.
+JPEG Quality Optimization: Re-encode at an optimal quality level (e.g., 75-85%) that balances file size (which affects upload speed and token consumption) against image clarity.
+Frame Resizing: If the source resolution is very high (e.g., 4K from a phone), downscale to a resolution that matches the Gemini API's optimal input (typically 768x768 or 1024x1024 for the vision model).
+Implementation (Python, in the FastAPI backend)
+import cv2
+import numpy as np
+def preprocess_frame(jpeg_bytes: bytes) -> bytes:
+# Decode
+img = cv2.imdecode(np.frombuffer(jpeg_bytes, np.uint8), cv2.IMREAD_COLOR)
+# 1. Resize to optimal dimensions
+img = cv2.resize(img, (1024, 768))
+# 2. CLAHE for lighting normalization
+lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+lab[:,:,0] = clahe.apply(lab[:,:,0])
+img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+# 3. Light denoising
+img = cv2.bilateralFilter(img, 5, 50, 50)
+# 4. Re-encode as optimized JPEG
+_, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+return buffer.tobytes()
+Client-Side Alternative (Lighter)
+If server-side processing adds too much latency, a lighter version can run in the browser using the Canvas API. Before capturing the frame from the video element, apply CSS filters or canvas pixel manipulation for basic brightness and contrast correction. This is less powerful than OpenCV but adds zero server overhead.
+Impact on Existing Features
+This improvement is transparent to all downstream features. Gemini receives cleaner frames, which means the Sentinel agent detects hazards more accurately, the Librarian agent reads equipment labels and QR codes better, and the screenshot captures (Task 3) produce clearer evidence images. The frame buffer for screenshot capture should store the processed frames, not the raw ones, so evidence images are also clean.
+Task 6: Role-Based Access Control (RBAC)
+The Problem
+In a real industrial deployment, not everyone should see the same thing or be able to do the same thing. A floor technician should see their assigned camera feeds and receive safety guidance. A shift supervisor should see all cameras on their floor and be able to review safety events. A safety manager should see facility-wide dashboards, generate reports, and configure alert thresholds. The current system has no concept of user roles or permissions.
+How It Integrates Into FieldVision
+Architecture Changes
+RBAC requires changes across the entire stack: a user authentication layer, a role/permission database, backend authorization middleware, and conditional UI rendering on the frontend.
+Role Definitions
+Implementation Components
+Authentication Layer: Add a login endpoint to FastAPI. For the hackathon, this can be simple JWT-based auth. The frontend sends credentials, the backend validates and returns a JWT token containing the user's role and zone assignment. All subsequent WebSocket connections and API calls include this token.
+Permission Middleware: Create a FastAPI dependency that extracts the JWT from the request, verifies it, and injects the user's permissions into the request context. Every endpoint checks these permissions before proceeding. For example, the endpoint that returns camera feeds filters the available feeds based on the user's zone assignment.
+Database (Simple): For the hackathon, a users.json file is sufficient. It maps user IDs to roles, assigned zones, and credentials. In production, this would be a proper database with hashed passwords and integration with enterprise SSO (LDAP/SAML).
+Conditional Frontend: The frontend UI adapts based on the role returned in the JWT. Technicians see a single camera view with voice controls. Supervisors see a multi-camera grid with an event timeline. Safety Managers see a dashboard with aggregated statistics and report generation controls.
+Hackathon Simplification
+For the hackathon demo, implement the role system with hardcoded users (no registration flow). Show two personas: a Technician view (single camera, voice interaction, guidance) and a Safety Manager view (multi-camera grid, event dashboard, report generation). Switching between them during the demo is a powerful way to show the system's versatility.
+Impact on Existing Features
+RBAC wraps around existing features without modifying their core logic. The Sentinel, Librarian, and Auditor agents are unaware of roles; they operate the same way regardless. The RBAC layer simply gates who can access what. The main risk is the time investment: building even a simple auth system during a hackathon is non-trivial. This should be scoped to the minimum viable implementation.
+Task 7: Consolidated PDF Reports (6/12/24 Hour Intervals)
+The Problem
+Currently, each session produces its own audit_log.json. In a real facility, safety managers need aggregated reports across multiple sessions, shifts, and time periods. A consolidated report covering the last 6, 12, or 24 hours gives a comprehensive view of facility safety posture.
+How It Integrates Into FieldVision
+Architecture Changes
+This task adds a report generation service to the backend and a simple scheduling mechanism. It builds directly on the session transcript data from Task 2 and the screenshot evidence from Task 3.
+Report Generation Pipeline
+A new FastAPI endpoint accepts parameters: time_range (6, 12, or 24 hours) and optional filters (zone, technician, severity_threshold).
+The endpoint queries all session_transcript.json files whose timestamps fall within the requested range.
+It aggregates the data: total sessions, total safety events by type, average severity, events by zone, and a chronological event timeline.
+The aggregated data is passed to a PDF generation library (ReportLab or WeasyPrint) that produces a professionally formatted compliance report.
+If screenshots exist for high-severity events (from Task 3), they are embedded in the relevant section of the PDF.
+Optionally, the raw aggregated data is passed to the Gemini 3 Flash model (the "Auditor") which generates an executive summary paragraph for the top of the report.
+PDF Report Structure
+Scheduling
+For the hackathon, a manual trigger (button click from the Safety Manager UI in Task 6) is sufficient. In production, this would be a cron job or a Cloud Scheduler task that triggers every 6/12/24 hours and stores the PDF in Google Cloud Storage, optionally emailing it to the safety team.
+Implementation Note
+Use Python's ReportLab library for PDF generation. It handles text, tables, charts (via matplotlib integration), and image embedding. The PDF should be saved to /reports/ with a timestamp-based filename and made downloadable through the UI.
+Impact on Existing Features
+This task is purely additive. It consumes data produced by the Auditor agent, the conversation logger (Task 2), and the screenshot system (Task 3). It does not modify any real-time processing. The only dependency is that Tasks 2 and 3 should be implemented first so the reports have rich data to draw from.
+Task 8: Badge-Gated Work Order Creation via Voice
+The Problem
+Technicians need to create work orders (e.g., "FieldVision, create a high priority ticket for pump 3 - oil leak") using voice commands. However, not everyone should be able to create work orders, and the system must verify the person's identity and authorization level before executing the action. The envisioned flow is: badge scan via video, identity verification, role check, then conditional order creation or escalation.
+How It Integrates Into FieldVision
+Architecture Changes
+This is the most complex task because it chains together multiple systems: voice command parsing (already exists), visual badge recognition (new), identity/role lookup (requires RBAC from Task 6), work order creation (new), and conditional escalation routing (new).
+End-to-End Flow
+The complete interaction sequence works as follows:
+Step 1 - Voice Trigger: Technician says: "FieldVision, create a high priority ticket for pump 3 - oil leak." Gemini recognizes this as a work order intent and triggers a new tool call: create_work_order.
+Step 2 - Badge Verification Request: Instead of immediately creating the order, the backend responds to Gemini's tool call with: "Badge verification required. Please show your ID badge to the camera." Gemini relays this verbally to the technician.
+Step 3 - Badge Scan via Video: The technician holds their badge up to the camera. The next video frames are analyzed by Gemini (which is already processing the video stream). The system instruction includes a directive: "When asked to verify a badge, look for an employee ID badge in the video frame. Extract the employee name, ID number, and any visible role/department information." Gemini extracts this information and triggers a second tool call: verify_badge with the extracted data.
+Step 4 - Identity and Role Verification: The backend receives the verify_badge tool call, looks up the employee ID in the users database (from Task 6 RBAC), and checks their permissions. Two outcomes are possible.
+Step 4a - Authorized: If the employee has the "create_work_order" permission (e.g., Senior Technician, Supervisor, or Manager role), the backend creates the work order in the ticketing system (a simple JSON file for hackathon, or an API call to ServiceNow/Jira in production). It returns a tool response confirming the order was created, and Gemini announces: "Work order WO-2026-0384 created. High priority ticket for Pump 3 - oil leak. Assigned to maintenance queue."
+Step 4b - Not Authorized: If the employee does not have permission, the backend still creates the request but routes it as a "pending approval" item to upper management. It returns a tool response indicating escalation, and Gemini announces: "You don't have authorization to create work orders directly. I've submitted this as a request to your supervisor. They'll be notified to review and approve ticket for Pump 3 - oil leak."
+Tool Declarations
+// Tool 1: Work Order Request
+{
+"name": "create_work_order",
+"description": "Creates a maintenance work order. Requires badge verification.",
+"parameters": {
+"equipment_id": { "type": "string" },
+"priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+"description": { "type": "string" },
+"requested_by_voice": { "type": "string", "description": "Transcription of the request" }
+}
+}
+// Tool 2: Badge Verification
+{
+"name": "verify_badge",
+"description": "Verifies an employee badge scanned via the camera.",
+"parameters": {
+"employee_name": { "type": "string" },
+"employee_id": { "type": "string" },
+"department": { "type": "string" }
+}
+}
+Work Order Data Structure
+{
+"order_id": "WO-2026-0384",
+"status": "approved" | "pending_approval",
+"priority": "high",
+"equipment": "Pump 3",
+"description": "Oil leak detected",
+"requested_by": { "id": "tech_042", "name": "John Smith", "role": "Technician" },
+"badge_verified": true,
+"created_at": "2026-02-08T14:45:00Z",
+"escalated_to": "supervisor_007"  // only if not authorized
+}
+Hackathon Simplification
+For the demo, use a local work_orders.json file instead of integrating with a real ticketing system. Prepare two badge images (printouts are fine): one for an authorized technician and one for a junior technician without work order permissions. During the demo, show both flows. The visual of someone holding up a badge, the AI reading it, and then either creating the order or escalating it is extremely compelling.
+Impact on Existing Features
+This task depends on Task 6 (RBAC) for the role verification lookup. It uses the existing voice interface and video stream without modification. It adds two new tool declarations to the Gemini setup, which simply extends the existing tool array. The work orders become additional entries in the session log, enriching the audit trail. The badge verification screenshots (the frame showing the badge) should also be captured and stored as evidence using the same mechanism as Task 3.
+Cross-Task Integration Map
+These 8 tasks are deeply interconnected. The following map shows the dependency chains and how data flows between tasks:
+Recommended Implementation Order
+Given the dependency chains and the hackathon time constraint (you are on Day 3 already), here is the recommended priority order:
+Priority 1 (Do first, unlocks everything): Task 1 (Persistent Voice) and Task 4 (Human Audio). These are configuration and behavioral fixes that improve every demo interaction.
+Priority 2 (Core demo differentiators): Task 3 (Visual Monitoring + Screenshots) and Task 2 (Q&A Transcript). These produce the visual evidence and rich data that make reports compelling.
+Priority 3 (If time permits): Task 5 (Video Cleaning). Quick win that improves detection quality with a few lines of OpenCV.
+Priority 4 (Ambitious but high-impact for judges): Task 8 (Badge Work Orders). This is the single most impressive feature to demo if you can pull it off. It shows a complete workflow: voice command, visual verification, role-based authorization, and conditional escalation.
+Priority 5 (Infrastructure, can be simplified): Task 6 (RBAC) and Task 7 (PDF Reports). These can be minimally stubbed (hardcoded roles, simple PDF) to support the demo narrative without full implementation.
+Each of these tasks extends FieldVision's existing "Thin Client, Heavy Server" architecture. No task requires a fundamental rearchitecture. They all work by adding new modules to the FastAPI backend, extending the Gemini tool declarations, enriching the system prompt, or adding UI views to the frontend. The core WebSocket pipeline from browser to FastAPI to Gemini remains the backbone for everything.
+
+--- TABLES ---
+# | Task | Complexity | Primary Layer
+1 | Persistent Voice Sessions (Multi-Question) | Medium | Backend (WebSocket/VAD)
+2 | Q&A Transcript in Reports | Low | Backend (Audit Logger)
+3 | Contextual Visual Monitoring + Screenshots | High | Backend (AI + Frame Capture)
+4 | Human-Like Audio Output | Medium | System Prompt + Live API Config
+5 | Video Feed Cleaning & Transformation | Medium | Backend (Pre-processing Pipeline)
+6 | RBAC for Camera Views & Actions | High | Full Stack (Auth + DB + UI)
+7 | Consolidated PDF Reports (6/12/24hr) | Medium | Backend (Scheduler + PDF Gen)
+8 | Badge-Gated Work Order Creation | High | Full Stack (Vision + RBAC + Ticketing)
+Role | Camera Access | Actions Permitted | Report Access
+Technician | Own assigned camera/device only | Voice Q&A, receive guidance, acknowledge warnings | Own session logs only
+Shift Supervisor | All cameras on their floor/zone | All Technician actions + review safety events, override non-critical alerts, view live sessions | All reports for their zone
+Safety Manager | All cameras facility-wide | All Supervisor actions + configure alert thresholds, generate consolidated reports, export compliance data | Full facility reports
+Administrator | Full system access | All actions + manage users, assign roles, configure zones and cameras | All reports + system logs
+Section | Content | Data Source
+Header | FieldVision Compliance Report, time range, facility name | Configuration
+Executive Summary | AI-generated 2-3 paragraph overview of safety posture | Gemini 3 Flash (Auditor)
+Statistics Dashboard | Total sessions, events by type (pie chart), severity distribution | Aggregated session logs
+Critical Events | Each high-severity event with timestamp, description, and screenshot | session_transcript.json + evidence images
+Q&A Transcript Highlights | Key questions asked and guidance provided (from Task 2) | session_transcript.json
+Zone Compliance | Compliance score per zone, violations per zone | Aggregated zone data
+Technician Summary | Per-technician activity and safety performance | Session logs grouped by tech ID
+Recommendations | AI-generated suggestions based on patterns | Gemini 3 Flash analysis
+Task | Depends On | Feeds Into | Shared Components
+1. Persistent Voice | None (foundational) | All other tasks | WebSocket handler, VAD config
+2. Q&A Transcript | Task 1 (for multi-turn data) | Task 7 (PDF reports) | Session logger module
+3. Visual Monitoring | None (extends Sentinel) | Task 7 (evidence images) | Frame buffer, tool schema
+4. Human Audio | None (config only) | Task 8 (voice commands) | System prompt, speechConfig
+5. Video Cleaning | None (pre-processing) | Task 3 (cleaner screenshots) | Frame processing pipeline
+6. RBAC | None (new layer) | Task 7 (access control), Task 8 (badge verify) | Auth middleware, user DB
+7. PDF Reports | Tasks 2, 3, 6 | Standalone output | Report generator, PDF library
+8. Badge Work Orders | Tasks 4, 6 | Task 7 (work order logs) | Tool declarations, work order DB

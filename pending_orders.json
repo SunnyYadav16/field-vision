@@ -1,1 +1,17 @@
-[]
+[
+  {
+    "order_id": "WO-20260208195347",
+    "status": "pending_approval",
+    "priority": "medium",
+    "equipment": "unknown",
+    "description": "",
+    "requested_by": {
+      "id": "tech_042",
+      "name": "Alex Rivera",
+      "role": "technician"
+    },
+    "badge_verified": true,
+    "created_at": "2026-02-09T00:53:47.913228Z",
+    "escalated_to": "sup_007"
+  }
+]

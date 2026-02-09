@@ -54,3 +54,4 @@ htmlcov/
 # Build
 *.manifest
 *.spec
+*.pdf
