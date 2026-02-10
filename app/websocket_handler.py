@@ -118,6 +118,8 @@ class ClientConnection:
         self._downstream_task: Optional[asyncio.Task] = None
         self._send_lock = asyncio.Lock()
         self._is_session_active = False
+        self.frame_buffer: list = []
+        self.max_buffer_size: int = 30
     
     async def handle_messages(self) -> None:
         """Main message handling loop"""
@@ -378,6 +380,46 @@ class ClientConnection:
         self.live_queue.send_realtime(audio_blob)
     
     async def _handle_video_frame(self, payload: dict) -> None:
+        """Forward video frame to Gemini, store for manager view, and buffer for screenshots"""
+        if not self._is_session_active or not self.live_queue:
+            return
+            
+        # Decode base64 JPEG
+        frame_b64 = payload.get("data", "")
+        frame_bytes = base64.b64decode(frame_b64)
+        
+        # Store in frame buffer with timestamp
+        from datetime import datetime, timezone
+        self.frame_buffer.append({
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'data': frame_bytes
+        })
+        
+        # Keep only last 30 frames
+        if len(self.frame_buffer) > self.max_buffer_size:
+            self.frame_buffer.pop(0)
+        
+        # Pass latest frame to tools for evidence capture
+        from app.fieldvision_agent.tools import set_latest_frame
+        # Always set frame, use connection_id as fallback
+        frame_session_id = self.session_id or self.connection_id
+        set_latest_frame(frame_session_id, frame_bytes)
+        
+        # Store latest frame for manager camera relay
+        if self.session_user:
+            active_camera_feeds[self.session_user["user_id"]] = {
+                "frame": frame_bytes,
+                "zone": self.session_user.get("zone", "unknown"),
+                "name": self.session_user.get("name", "Unknown"),
+                "role": self.session_user.get("role", "technician")
+            }
+        
+        # Send as real-time blob
+        video_blob = types.Blob(
+            mime_type="image/jpeg",
+            data=frame_bytes
+        )
+        self.live_queue.send_realtime(video_blob)
         """Forward video frame to Gemini via LiveRequestQueue and store for manager view"""
         if not self._is_session_active or not self.live_queue:
             return

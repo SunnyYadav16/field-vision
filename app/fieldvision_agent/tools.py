@@ -63,7 +63,7 @@ def log_safety_event(event_type: str, severity: int, description: str, tool_cont
     # Capture visual evidence for severity >= 3
     evidence_url = None
     frame_data = _latest_frames.get(session_id)
-    if frame_data and severity >= 3:
+    if frame_data and severity >= 4:
         evidence_url = _save_evidence_sync(session_id, frame_data)
 
     # Log to audit trail
